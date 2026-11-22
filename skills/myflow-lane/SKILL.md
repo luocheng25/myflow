@@ -33,6 +33,7 @@ description: >-
 - 不重试已被否定的想法：先看 `mf status <task>` 里已放弃的 lane 和死路记录。
 - 发现规律或坑：`mf note <task> --lane <lane> --kind finding|deadend "…（证据 A7）" [--file 笔记]`；本线历史：`mf status <task> --lane <lane>`。
 - 同一操作做第二次时，写成脚本放进 `<task_dir>/tools/`，第一行 docstring 写“用途 + 用法”。
+- 需要再派子 agent（例如只读调研）时，一律用 Claude Opus 5.5、推理强度 max（runSubagent 传 `model="Claude Opus 5.5 (copilot)"`），不用默认模型。
 
 ## 结束（达标 / 方向到顶 / 被拒绝）
 1. `mf lane set <task> <lane> --status done|abandoned|blocked --reason "结论 + 证据"`

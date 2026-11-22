@@ -546,6 +546,7 @@ def role_prompts(st: State, m: dict) -> str:
     return "\n".join([
         f"收尾 {mid} 已就绪：集成 worktree {wt}（候选 {prep['candidate'][:10]}，运行时树 {prep['runtime_tree']}）。",
         "派 1 个独立的复核子 agent（不是实现者的会话），只做一次；下一个里程碑的实现者现在就可以开工（流水线：下一个 prep 时 mf 自动合并本次收尾）：",
+        f"子 agent 模型：{cli.SUBAGENT_MODEL}",
         f"prompt：使用 skill myflow-review。任务 {tid} 里程碑 {mid}：对照改动（{diff}）、{wt} 里的代码与用例、"
         f"实现者报告 {report}、`{mf} status {tid} {mid}` 的数据（计划卡、验收数字），更新入口文档 {entry_p}"
         "（只改受影响的节，写成现在的设计；本里程碑改了什么、为什么、与计划的差异写在卡片里），核对基线与对照的来源、"

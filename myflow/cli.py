@@ -32,6 +32,8 @@ from myflow.runner import (Lease, abba_order, analyze_abba, build_env, combine_r
                            smi_snapshot, speedup, tail)
 
 MF = str(PKG_ROOT / "bin" / "mf")
+# user rule 11-22: every agent / sub-agent is launched with this model at max reasoning effort
+SUBAGENT_MODEL = 'Claude Opus 5.5、推理强度 max（runSubagent 传 model="Claude Opus 5.5 (copilot)"）'
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]{1,63}$")
 LANE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
 
@@ -518,6 +520,7 @@ def cmd_lane_new(a):
         auto_phase(State(tdir), "implement", f"lane {a.lane}")
     print(f"lane {a.lane}: worktree {wt} (branch {branch}, from {start[:10]})")
     print(f"brief: {brief}")
+    print(f"subagent model: {SUBAGENT_MODEL}")
     print(f"subagent prompt: 使用 skill myflow-lane。先完整阅读 {brief} 再开始；所有尝试必须用 `{MF} try {st.id} --lane {a.lane} ...` 提交。")
     _after(tdir)
 

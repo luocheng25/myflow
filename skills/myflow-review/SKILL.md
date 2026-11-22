@@ -90,6 +90,9 @@ description: >-
 ## 语言
 推送到 pyhip 的文档和卡片（卡片会进提交信息）一律用中文；代码、标识符、命令保留原文。
 
+## 子 agent
+需要再派子 agent 时，一律用 Claude Opus 5.5、推理强度 max（runSubagent 传 `model="Claude Opus 5.5 (copilot)"`），不用默认模型。
+
 ## 结束
 `mf ms review <task> <M> --session <你的会话名> --card <task_dir>/milestones/<M>/card.md -m "<一句话：改了哪些、补了几个用例、用例结果>"`
 （本里程碑改动或删除了已有用例 / bench 时，加 `--tests-why "…"`；mf 会提示。）

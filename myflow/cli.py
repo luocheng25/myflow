@@ -100,7 +100,7 @@ def _resolve_commit(st: State, ref: str) -> str:
         if not c and m.get("status") == "closing":  # pipelining: build on the candidate while it is reviewed
             c = m["prep"]["candidate"]
         if not c:
-            raise MfError(f"milestone {ref} is neither closed nor closing (mf ms show {st.id})")
+            raise MfError(f"milestone {ref} is neither closed nor closing (mf status {st.id})")
         return c
     return rev_parse(Path(st.task["repo"]), ref)
 
@@ -152,7 +152,7 @@ def _after(tdir: Path, lane=None) -> None:
     for s in steers:
         who = f"lane {s['lane']}" if s["lane"] else "全体"
         print(f"📨 用户留言 #{s['n']}（{render.age(time.time() - s['t'])} 前，{who}）：{s['text']}")
-        print(f"   处理后回执：{MF} ack {st.id} {s['n']} \"<如何处理>\"")
+        print(f"   处理后回执：{MF} note {st.id} --ack {s['n']} \"<如何处理>\"")
 
 
 def _parse_value(v: str):
@@ -239,22 +239,6 @@ def cmd_set(a):
     _after(tdir)
 
 
-def cmd_budget(a):
-    tdir = task_dir_of(a.task)
-    st = State(tdir)
-    pairs = []
-    for flag, key in (("attempts", "max_attempts"), ("hours", "max_hours"), ("no_improve", "max_no_improve")):
-        v = getattr(a, flag)
-        if v is None:
-            continue
-        cur = st.task["budget"].get(key) or 0
-        new = cur + float(v[1:]) if str(v).startswith("+") else float(v)
-        pairs.append((f"budget.{key}", int(new) if key != "max_hours" else new))
-    for key, old, new, _ in _set(tdir, pairs, a.why or "", a.by):
-        print(f"{key}: {old} -> {new}")
-    _after(tdir)
-
-
 def cmd_brief(a):
     tdir = task_dir_of(a.task)
     st = State(tdir)
@@ -262,9 +246,9 @@ def cmd_brief(a):
     if len(text) > 600:
         print("[mf] brief 超过 600 字已截断：brief 是给人一眼看的，细节请写文件并用 mf note --file", file=sys.stderr)
         text = text[:600] + "…"
-    if a.ask and a.lane:
-        raise MfError("--ask is task-level (gates belong to the orchestrator), drop --lane")
-    phase = a.phase or st.phase
+    if (a.ask or a.gate) and a.lane:
+        raise MfError("--ask / --gate are task-level (questions belong to the orchestrator), drop --lane")
+    phase = a.phase or ("plan" if a.ask and st.freeze and st.phase in ("freeze", "survey") else st.phase)
     if a.ask and phase == "plan" and st.freeze:
         from myflow import ms
         if ms.ensure_plan_gate(st, st.round):  # user rule 11-22: a plan that follows the pushed promise is only shown
@@ -280,7 +264,14 @@ def cmd_brief(a):
         else:
             print("[mf] ⚠ git.url / git.branch 未设置：先 mf set 推送目标并写进 SPEC，批准需求时一并确认；"
                   "否则首次推送还要单独问用户一次", file=sys.stderr)
+    for key in a.gate or []:  # mf's own question, now put to the user: from here on it is the user's turn
+        g = st.gates.get(key)
+        if not g or g.get("state") != "pending":
+            raise MfError(f"no pending question '{key}'; pending: {[x['key'] for x in st.pending_gates()] or 'none'}")
     append_event(tdir, "brief", text, lane=a.lane, by="agent", phase=phase, round=st.round, ask=a.ask)
+    for key in a.gate or []:
+        append_event(tdir, "gate.asked", "", by="agent", gate=key, via="chat")
+        print(f"【{key}】已转达给用户；用户答复后：{MF} decide {st.id} --gate {key} \"<用户原话>\"")
     if a.ask:
         print(f"gate【{gate_key(phase, st.round)}】已挂起：请向用户展示这段 brief 并等待回复；"
               f"回复后：{MF} decide {st.id} --gate {gate_key(phase, st.round)} \"<用户原话>\"")
@@ -290,6 +281,8 @@ def cmd_brief(a):
 def cmd_decide(a):
     tdir = task_dir_of(a.task)
     st = State(tdir)
+    if a.delegate is not None:
+        return _delegate(tdir, st, a.delegate, a.quote or " ".join(a.text).strip())
     gate = a.gate
     if gate == "auto":
         pend = st.pending_gates()
@@ -307,7 +300,7 @@ def cmd_decide(a):
     if a.default:
         dl = st.delegated()
         if not dl:
-            raise MfRefused("没有生效的用户授权（mf delegate）：这件事要先问用户")
+            raise MfRefused("没有生效的用户授权（mf decide --delegate）：这件事要先问用户")
         by, quote = "default", dl["quote"]
         extra["delegation_t"] = dl["t"]
     else:
@@ -317,38 +310,23 @@ def cmd_decide(a):
     _after(tdir)
 
 
-def cmd_delegate(a):
+def _delegate(tdir: Path, st: State, hours: float, quote) -> None:
     """The user lets the orchestrator decide by the defaults for a while; every such decision stays listed for review."""
-    tdir = task_dir_of(a.task)
-    st = State(tdir)
-    if a.off:
+    if hours <= 0:
         append_event(tdir, "delegate", "授权结束", by="user", until=0)
-        print(f"授权已结束：之后需要确认的问题照常问用户（期间按默认值决定的 {len(st.default_decisions())} 项见 mf show）")
+        print(f"授权已结束：之后需要确认的问题照常问用户（期间按默认值决定的 {len(st.default_decisions())} 项见 mf status {st.id}）")
     else:
-        if not a.quote or not a.hours or a.hours <= 0:
-            raise MfError("--hours H and --quote \"<the user's exact words>\" are required")
-        until = time.time() + a.hours * 3600
-        append_event(tdir, "delegate", f"用户授权 {a.hours:g} 小时内按默认值决定", by="user", until=until, quote=a.quote)
+        if not quote:
+            raise MfError("mf decide <task> --delegate HOURS \"<the user's exact words>\"")
+        until = time.time() + hours * 3600
+        append_event(tdir, "delegate", f"用户授权 {hours:g} 小时内按默认值决定", by="user", until=until, quote=quote)
         print(f"授权至 {time.strftime('%m-%d %H:%M', time.localtime(until))}：期间需要确认的问题由编排者按默认值（推荐项）决定，"
               f"用 {MF} decide {st.id} [--gate <key>] --default \"<选了什么、为什么>\"；这些决定会单独列出，供用户回来过目")
     _after(tdir)
 
 
-def cmd_asked(a):
-    """The orchestrator relayed a pending gate to the user (chat / form): from now on it is the user's turn."""
-    tdir = task_dir_of(a.task)
-    st = State(tdir)
-    for key in a.gates:
-        g = st.gates.get(key)
-        if not g or g.get("state") != "pending":
-            raise MfError(f"no pending gate '{key}'; pending: {[x['key'] for x in st.pending_gates()] or 'none'}")
-        append_event(tdir, "gate.asked", "", by="agent", gate=key, via=a.via)
-        print(f"gate {key}: asked the user via {a.via}; after the reply: {MF} decide {st.id} --gate {key} \"<user's words>\"")
-    _after(tdir)
-
-
 def auto_phase(st: State, phase: str, why: str) -> None:
-    """Phases follow the actions (user request 11-22); `mf phase` is only needed to override or to finish.
+    """Phases follow the actions (user request 11-22); `mf report --done` finishes.
     Planning a performance milestone after a round was integrated starts the next round. Gates still apply."""
     if phase not in PHASES or st.phase not in PHASES:
         return
@@ -363,37 +341,6 @@ def auto_phase(st: State, phase: str, why: str) -> None:
         if st.gate_mode(p) == "ask" and not st.gate_ok(p, r) and not (p == "plan" and ms.ensure_plan_gate(st, r)):
             return  # the gate decides; the action reports what is missing
     append_event(st.dir, "phase", why, by="mf", phase=phase, round=rnd)
-
-
-def cmd_phase(a):
-    tdir = task_dir_of(a.task)
-    st = State(tdir)
-    new = a.phase
-    if new not in PHASES:
-        raise MfError(f"phase must be one of {PHASES}")
-    cur_i, new_i = PHASES.index(st.phase), PHASES.index(new)
-    rnd = st.round
-    if new == "plan" and st.phase in LOOP_PHASES[1:]:
-        rnd += 1
-    if new_i > cur_i:
-        for p in PHASES[cur_i:new_i]:
-            r = 1 if p == "spec" else st.round
-            if st.gate_mode(p) == "ask" and not st.gate_ok(p, r):
-                raise MfRefused(f"阶段 {p} 需要用户确认后才能离开：先 `mf brief {st.id} --ask \"...\"`，"
-                                f"等用户回复后 `mf decide {st.id} --gate {gate_key(p, r)} \"...\"`")
-    brief = " ".join(a.brief or []).strip()
-    append_event(tdir, "phase", brief, by="agent", phase=new, round=rnd)
-    if brief:
-        append_event(tdir, "brief", brief[:600], by="agent", phase=new, round=rnd, ask=False)
-    print(f"{st.id}: {st.phase} -> {new} (R{rnd})")
-    _after(tdir)
-
-
-def cmd_stop(a):
-    tdir = task_dir_of(a.task)
-    append_event(tdir, "stop", " ".join(a.reason), by=a.by)
-    print("stop requested: mf try will refuse; orchestrator should integrate + report")
-    _after(tdir)
 
 
 # ---------------------------------------------------------------- measurement
@@ -502,6 +449,7 @@ def cmd_freeze(a):
     med, noise = combine_runs(runs)
     append_event(tdir, "freeze", f"基线 {base[:10]}：{len(med)} cases，噪声 {render.pct(noise)}", by="mf",
                  base=base, protect=protect, contract=contract_hash(t), goalposts=goalposts(t), baseline=med,
+                 parse=t["parse"], metric={k: t["metric"][k] for k in ("direction", "aggregate", "weights") if k in t["metric"]},
                  baseline_quick=quick, noise=noise, runs=runs, gpu=gpu, repeats=a.repeats, run=str(run_dir),
                  correctness_log=c["log"])
     st = State(tdir)
@@ -563,8 +511,8 @@ def cmd_lane_new(a):
                     _timeout(st))
         if r["rc"] != 0:
             print(f"[mf] ⚠ setup failed in lane worktree (rc={r['rc']}): {r['log']}", file=sys.stderr)
-    brief = _write_brief(st, a.lane, a.direction, a.hyp, wt)
-    append_event(tdir, "lane.new", a.direction, lane=a.lane, by="agent", hyp=a.hyp, round=st.round, wt=str(wt),
+    brief = _write_brief(st, a.lane, a.direction, wt)
+    append_event(tdir, "lane.new", a.direction, lane=a.lane, by="agent", round=st.round, wt=str(wt),
                  branch=branch, start=start, merge=merged, brief=str(brief))
     if st.freeze:
         auto_phase(State(tdir), "implement", f"lane {a.lane}")
@@ -574,13 +522,12 @@ def cmd_lane_new(a):
     _after(tdir)
 
 
-def _write_brief(st: State, lane: str, direction: str, hyp, wt: Path) -> Path:
+def _write_brief(st: State, lane: str, direction: str, wt: Path) -> Path:
     t, b = st.task, st.task["budget"]
-    h = st.hyps.get(hyp) if hyp else None
     tools = _tool_index(st) or "（暂无）"
     repl = {
         "task": st.id, "lane": lane, "direction": direction, "goal": t.get("goal", ""), "target": f"{st.target:g}",
-        "hyp": f"{hyp}: {h['text']}（预测 {h['predict']}）" if h else (hyp or "（无）"), "wt": str(wt), "mf": MF,
+        "wt": str(wt), "mf": MF,
         "task_dir": str(st.dir), "allow": ", ".join(t["scope"]["allow"]) or "（不限，protect 除外）",
         "protect": ", ".join(t["scope"]["protect"]) or "（未设置）", "correctness": t["commands"]["correctness"],
         "bench": t["commands"]["bench"], "bench_quick": t["commands"].get("bench_quick") or "（无）",
@@ -643,7 +590,7 @@ def _try_locked(a, st: State, ln: dict, kind: str):
     commit = snapshot(wt, t["scope"]["allow"], ignore, f"mf {st.id}/{a.lane}: {a.idea[:100]}", t["scope"]["protect"])
     diff = diffstat(wt, sbase, commit)
     write_patch(wt, sbase, commit, run_dir / "diff.patch")
-    data = {"idea": a.idea, "hyp": a.hyp, "kind": kind, "commit": commit, "diff": diff, "note": a.note or "",
+    data = {"idea": a.idea, "kind": kind, "commit": commit, "diff": diff, "note": a.note or "",
             "run": str(run_dir), "round": ln["round"]}
     status = PASS
     if oracle:
@@ -692,7 +639,7 @@ def _try_locked(a, st: State, ln: dict, kind: str):
     if ok and data.get("speedup"):
         best = st.best_self
         tag = "（新的自测最佳）" if best and best.get("n") == n else ""
-        head += f"  自测 {render.fx(data['speedup'])}{tag}（对冻结基线、未配对；正式数字需 mf verify）"
+        head += f"  自测 {render.fx(data['speedup'])}{tag}（对冻结基线、未配对；正式数字在 mf ms prep 时同卡复核）"
     print(head)
     for key in ("correctness", "bench"):
         r = data.get(key)
@@ -713,30 +660,6 @@ def _try_locked(a, st: State, ln: dict, kind: str):
     print(f"  预算: 尝试 {len(st.attempts)}/{b.get('max_attempts')} · 本线连续无提升 {ln['no_improve']}/{b.get('max_no_improve')}"
           f" · 本线连败 {ln['fail_streak']}/{b.get('max_fail_streak')}")
     _after(tdir, a.lane)
-
-
-def cmd_verify(a):
-    tdir = task_dir_of(a.task)
-    st = State(tdir)
-    ln = _lane(st, a.lane)
-    why = guard.refusal(st, "verify")
-    if why:
-        raise MfRefused(why)
-    if a.attempt:
-        at = st.attempt(a.attempt)
-        if not at or at.get("lane") != a.lane:
-            raise MfError(f"A{a.attempt} is not an attempt of lane {a.lane}")
-    else:
-        at = ln["best_self"]
-        if not at:
-            raise MfError(f"lane {a.lane} has no passing full attempt; pass --attempt N")
-    commit, base = at["commit"], st.freeze["base"]
-    against = _resolve_commit(st, a.against) if getattr(a, "against", None) else None
-    if against and against == base:
-        against = None  # the frozen base is what a plain verify compares against anyway
-    with _lane_lock(st, f"_verify-{a.lane}"):
-        return _verify_locked(a, st, ln, at, commit, base, against=against,
-                              against_ms=a.against if against and re.match(r"M\d", a.against or "") else None)
 
 
 def _verify_locked(a, st: State, ln: dict, at: dict, commit: str, base: str, against=None, against_ms=None):
@@ -999,37 +922,21 @@ def cmd_run(a):
 # ---------------------------------------------------------------- ledger
 
 
-def cmd_hyp(a):
-    tdir = task_dir_of(a.task)
-    st = State(tdir)
-    if a.action == "add":
-        ev = append_event(tdir, "hyp.add", " ".join(a.args), lane=a.lane, by="agent", counter="hyp.add",
-                          predict=a.predict or "", test=a.test or "")
-        print(f"H{ev['data']['n']}: {' '.join(a.args)}")
-    else:
-        if len(a.args) < 2:
-            raise MfError("usage: mf hyp <task> set H1 confirmed|refuted|open|dropped --evidence '...'")
-        hid, status = a.args[0], a.args[1]
-        if hid not in st.hyps:
-            raise MfError(f"unknown hypothesis {hid}")
-        if status not in ("confirmed", "refuted", "open", "dropped"):
-            raise MfError("status: confirmed|refuted|open|dropped")
-        if status in ("confirmed", "refuted") and not a.evidence:
-            raise MfError("--evidence is required (attempt/verify id, file, or measurement)")
-        append_event(tdir, "hyp.set", a.evidence or "", lane=a.lane, by="agent", id=hid, status=status)
-        print(f"{hid}: {status}")
-    _after(tdir, a.lane)
-
-
-def cmd_ceiling(a):
-    tdir = task_dir_of(a.task)
-    append_event(tdir, "ceiling", " ".join(a.basis), by="agent", value=a.value)
-    print(f"ceiling estimate {a.value:g}× recorded")
-    _after(tdir)
-
-
 def cmd_note(a):
+    """Write it down. Default: what I am doing now (liveness, not progress); --kind finding|deadend|survey|plan|summary|
+    lesson: progress; --ack N: how the user's message #N was handled."""
     tdir = task_dir_of(a.task)
+    text = " ".join(a.title)
+    if a.ack is not None:
+        st = State(tdir)
+        if a.ack not in st.steers:
+            raise MfError(f"no message #{a.ack}")
+        append_event(tdir, "ack", text, lane=a.lane, by="agent", n=a.ack)
+        print(f"message #{a.ack} acknowledged")
+        return _after(tdir, a.lane)
+    if a.kind == "ping" and not a.file:
+        append_event(tdir, "ping", text[:200], lane=a.lane, by="agent")
+        return _after(tdir, a.lane)
     f = None
     if a.file:
         src = Path(a.file).expanduser().resolve()
@@ -1041,21 +948,13 @@ def cmd_note(a):
             dst = tdir / "notes" / f"{time.strftime('%m%d-%H%M%S')}-{src.name}"
             shutil.copy2(src, dst)
             f = str(dst)
-    append_event(tdir, "note", " ".join(a.title)[:300], lane=a.lane, by="agent", kind=a.kind, file=f)
+    append_event(tdir, "note", text[:300], lane=a.lane, by="agent", kind="info" if a.kind == "ping" else a.kind, file=f)
     if a.kind == "survey":
         auto_phase(State(tdir), "survey", "调研")
     print("note recorded" + (f": {f}" if f else ""))
     _after(tdir, a.lane)
 
 
-def cmd_ping(a):
-    """Cheap liveness + 'what I am doing now' line for long stretches without other mf calls."""
-    tdir = task_dir_of(a.task)
-    append_event(tdir, "ping", " ".join(a.text)[:200], lane=a.lane, by="agent")
-    _after(tdir, a.lane)
-
-
-# alerts the orchestrator itself must act on while sub-agents work in the background
 AWAIT_CODES = ("gate_unasked", "no_report", "spin", "stale", "run_lost")
 
 
@@ -1063,7 +962,7 @@ def _needs_orchestrator(st: State) -> list:
     out = [f"{render.ICON[x['level']]} {x['msg']}" for x in guard.alerts(st)
            if x["level"] == "crit" or (x["code"] in AWAIT_CODES and x["level"] == "warn")
            or (x["code"] == "steer" and x["level"] == "warn")]  # a lane agent has not picked up its message
-    out += [f"📨 用户留言 #{s['n']}：{s['text'][:200]}（处理后 {MF} ack {st.id} {s['n']} \"<如何处理>\"）"
+    out += [f"📨 用户留言 #{s['n']}：{s['text'][:200]}（处理后 {MF} note {st.id} --ack {s['n']} \"<如何处理>\"）"
             for s in st.unacked() if not s["lane"]]
     return out
 
@@ -1097,28 +996,49 @@ def cmd_steer(a):
     tdir = task_dir_of(a.task)
     ev = append_event(tdir, "steer", " ".join(a.text)[:2000], lane=a.lane, by=a.by, counter="steer")
     print(f"steer #{ev['data']['n']} queued: agents see it on their next mf call")
+    if a.stop:
+        append_event(tdir, "stop", " ".join(a.text), by=a.by)
+        print("stop requested: mf try will refuse; the orchestrator closes up and reports")
     render.render_task(State(tdir))
-
-
-def cmd_ack(a):
-    tdir = task_dir_of(a.task)
-    st = State(tdir)
-    if a.n not in st.steers:
-        raise MfError(f"no steer #{a.n}")
-    append_event(tdir, "ack", " ".join(a.how), lane=a.lane, by="agent", n=a.n)
-    print(f"steer #{a.n} acknowledged")
-    _after(tdir, a.lane)
 
 
 # ---------------------------------------------------------------- views
 
 
 def cmd_status(a):
+    """Everything you look at: all tasks; one task (roadmap, direction, alerts, lanes); a milestone (M3) or an
+    attempt (A7); a lane."""
+    if a.task:
+        st = _st(a.task)
+        item = (a.item or "").strip()
+        if a.json:
+            print(render.dump_json(st))
+            return
+        if re.match(r"M\d{1,3}[a-z]?$", item):
+            from myflow import ms
+            print(ms.show_text(st, item))
+        elif re.match(r"A?\d+$", item):
+            print(render.text_attempt(st, int(item.lstrip("A"))))
+        elif item:
+            raise MfError(f"unknown item '{item}': M<k> (milestone) or A<n> (attempt)")
+        elif a.lane:
+            ln = _lane(st, a.lane)
+            print(f"lane {ln['name']} · {ln['status']} {ln['reason']}\n  方向: {ln['direction']}\n  worktree: {ln['wt']}")
+            for at in ln["attempts"]:
+                print(f"  A{at.get('n')} {render.STATUS_ZH.get(at.get('status'), at.get('status'))} "
+                      f"{render.fx(at.get('speedup'))} {at.get('idea', '')[:80]}")
+        else:
+            print(render.status_md(st))
+            if st.milestones:
+                print(render.roadmap_text(st))
+        _after(st.dir, a.lane)  # re-render; and what the reader must react to (messages, alerts)
+        return
     states = [State(d) for d in _dirs()]
     if a.json:
         print(json.dumps([render.summary(s) for s in states], ensure_ascii=False, indent=1, default=str))
         return
     print(render.term_overview(states))
+    print("\n".join(gpu_lines()))
     try:
         p = render.render_index()
         print(f"\ndashboard: {p}   (live: mf serve)")
@@ -1131,96 +1051,64 @@ def _dirs():
     return all_task_dirs()
 
 
-def cmd_show(a):
-    st = _st(a.task)
-    if a.json:
-        print(render.dump_json(st))
-    elif a.attempt:
-        print(render.text_attempt(st, a.attempt))
-    elif a.lane:
-        ln = _lane(st, a.lane)
-        print(f"lane {ln['name']} · {ln['status']} {ln['reason']}\n  方向: {ln['direction']}\n  worktree: {ln['wt']}")
-        for at in ln["attempts"]:
-            print(f"  A{at.get('n')} {render.STATUS_ZH.get(at.get('status'), at.get('status'))} "
-                  f"{render.fx(at.get('speedup'))} {at.get('idea', '')[:80]}")
-    else:
-        print(render.status_md(st))
-    _after(st.dir, a.lane)
-
-
-def cmd_tail(a):
-    st = _st(a.task)
-    for e in st.events[-a.n:]:
-        print(f"{e.get('seq'):>4} {render.hm(e.get('t'))} {e.get('kind'):<15} {e.get('lane', '') or '':<10} "
-              f"{e.get('by', ''):<5} {e.get('title', '')[:110]}")
-
-
-def cmd_watch(a):
-    try:
-        while True:
-            out = render.term_overview([State(d) for d in _dirs()]) if not a.task else render.status_md(_st(a.task))
-            sys.stdout.write("\033[2J\033[H" + out + "\n")
-            sys.stdout.flush()
-            time.sleep(a.interval)
-    except KeyboardInterrupt:
-        return 0
-
-
-def cmd_render(a):
-    dirs = [task_dir_of(a.task)] if a.task else _dirs()
-    for d in dirs:
-        render.render_task(State(d))
-        print(d / "dashboard.html")
-    print(render.render_index())
-
-
 def cmd_serve(a):
     from myflow.serve import serve
     serve(a.host, a.port)
 
 
-def cmd_guard(a):
-    st = _st(a.task)
-    al = guard.alerts(st)
-    for x in al:
-        print(f"{render.ICON[x['level']]} {x['level']:<4} {x['code']:<16} {x['msg']}")
-    if not al:
-        print("● ok")
-    h = guard.health(al)
-    return 2 if h == "crit" else (1 if h == "warn" or any(x["level"] == "ask" for x in al) else 0)
-
-
-def cmd_audit(a):
-    """Re-derive every recorded number from raw logs; any mismatch means the record was edited."""
-    st = _st(a.task)
+def audit_problems(st: State) -> list:
+    """Re-derive every recorded number from raw logs; any mismatch means the record was edited. Each record is
+    re-derived under the freeze it was measured against: a re-freeze changes the baseline (and maybe the parse /
+    metric contract), never the numbers measured before it."""
     problems = audit_chain(st.dir)
     t = st.task
+    freezes = [dict(e.get("data") or {}, seq=e["seq"]) for e in st.events if e.get("kind") == "freeze"]
 
-    def reparse(log):
-        text = Path(log).read_text(encoding="utf-8", errors="replace")
-        return parse_metrics(text, t["parse"], {"run": str(Path(log).parent)})[0]
+    def epoch(seq, freeze_seq=None):
+        if freeze_seq is not None:
+            return next((f for f in freezes if f["seq"] == freeze_seq), None)
+        return next((f for f in reversed(freezes) if f["seq"] < seq), None)
+
+    def contract(fz):  # recorded with each freeze since 11-22; older freezes: the task's current contract
+        return (fz or {}).get("parse") or t["parse"], dict(t["metric"], **((fz or {}).get("metric") or {}))
+
+    def reparse(log, parse):
+        try:
+            text = Path(log).read_text(encoding="utf-8", errors="replace")
+            return parse_metrics(text, parse, {"run": str(Path(log).parent)})[0]
+        except (OSError, ValueError, KeyError, TypeError, MfError):
+            return None
 
     def same(x, y):
         return set(x) == set(y) and all(abs(x[k] - y[k]) <= 1e-9 * max(1.0, abs(y[k])) for k in x)
 
-    if st.freeze:
-        runs = sorted(Path(st.freeze["run"]).glob("bench*/out.log"))
-        parsed = [reparse(p) for p in runs]
-        if len(parsed) != len(st.freeze.get("runs", [])) or not all(same(p, r) for p, r in zip(parsed, st.freeze["runs"])):
-            problems.append("freeze: baseline runs do not match raw logs")
-        elif not same(combine_runs(parsed)[0], st.freeze["baseline"]):
-            problems.append("freeze: baseline medians do not match raw logs")
+    for fz in freezes:
+        what = "freeze" if len(freezes) == 1 else f"freeze (seq {fz['seq']})"
+        parse = contract(fz)[0]
+        parsed = [reparse(p, parse) for p in sorted(Path(fz.get("run", "")).glob("bench*/out.log"))]
+        if any(x is None for x in parsed):
+            problems.append(f"{what}: a baseline raw log cannot be read")
+        elif len(parsed) != len(fz.get("runs", [])) or not all(same(p, r) for p, r in zip(parsed, fz["runs"])):
+            problems.append(f"{what}: baseline runs do not match raw logs")
+        elif not same(combine_runs(parsed)[0], fz.get("baseline", {})):
+            problems.append(f"{what}: baseline medians do not match raw logs")
     for at in st.attempts:
         b = at.get("bench") or {}
-        if at.get("status") == PASS and b.get("log"):
-            if not Path(b["log"]).exists():
-                problems.append(f"A{at.get('n')}: raw log missing {b['log']}")
-            elif not same(reparse(b["log"]), at.get("metrics", {})):
-                problems.append(f"A{at.get('n')}: metrics do not match raw log")
-            elif at.get("kind", "full") == "full" and st.freeze:
-                sp = speedup(st.freeze["baseline"], at["metrics"], t["metric"])[0]
-                if sp and at.get("speedup") and abs(sp - at["speedup"]) > 1e-9:
-                    problems.append(f"A{at.get('n')}: speedup {at['speedup']} != recomputed {sp}")
+        if at.get("status") != PASS or not b.get("log"):
+            continue
+        fz = epoch(at["seq"])
+        parse, metric = contract(fz)
+        got = reparse(b["log"], parse)
+        if not Path(b["log"]).exists():
+            problems.append(f"A{at.get('n')}: raw log missing {b['log']}")
+        elif got is None:
+            problems.append(f"A{at.get('n')}: raw log cannot be read {b['log']}")
+        elif not same(got, at.get("metrics", {})):
+            problems.append(f"A{at.get('n')}: metrics do not match raw log")
+        elif at.get("kind", "full") == "full" and fz:
+            sp = speedup(fz["baseline"], at["metrics"], metric)[0]
+            if sp and at.get("speedup") and abs(sp - at["speedup"]) > 1e-9:
+                problems.append(f"A{at.get('n')}: speedup {at['speedup']} != recomputed {sp}")
     for v in st.verifies:
         if v.get("verdict") not in ("improved", "no_gain", "regression"):
             continue
@@ -1228,30 +1116,37 @@ def cmd_audit(a):
         if not p.exists():
             problems.append(f"V{v.get('n')}: abba.json missing")
             continue
-        arms = json.loads(p.read_text())["arms"]
-        A = [reparse(x["log"]) for x in arms if x["arm"] == "A"]
-        B = [reparse(x["log"]) for x in arms if x["arm"] == "B"]
-        sp = analyze_abba(A, B, t["metric"])["speedup"]
+        parse, metric = contract(epoch(v["seq"], v.get("freeze_seq")))
+        ref = "P" if v.get("arms") == 3 and v.get("against") else "A"  # three-arm run: incremental = previous vs candidate
+        try:
+            arms = json.loads(p.read_text())["arms"]
+            logs = {k: [x["log"] for x in arms if x["arm"] == k] for k in (ref, "B")}
+        except (OSError, ValueError, KeyError, TypeError):
+            problems.append(f"V{v.get('n')}: abba.json cannot be read")
+            continue
+        A, B = ([reparse(x, parse) for x in logs[k]] for k in (ref, "B"))
+        if any(x is None for x in A + B):
+            problems.append(f"V{v.get('n')}: a raw log is missing or cannot be read ({v['run']})")
+            continue
+        sp = analyze_abba(A, B, metric)["speedup"]
         if sp is None or abs(sp - v["speedup"]) > 1e-6:
             problems.append(f"V{v.get('n')}: verified speedup {v.get('speedup')} != recomputed {sp}")
-    for x in problems:
-        print(f"✖ {x}")
-    print("audit ok: chain intact, all numbers re-derived from raw logs" if not problems else f"{len(problems)} problem(s)")
-    return 1 if problems else 0
+    return problems
 
 
-def cmd_gpu(a):
+def gpu_lines() -> list:
+    """GPU use and myflow leases, for the overview."""
     snap = smi_snapshot() or {}
     holders = lease_holders()
     gpus = sorted(set(snap) | {h["gpu"] for h in holders})
-    if not gpus:
-        print("no GPU telemetry (rocm-smi missing?) and no leases")
+    out = []
     for g in gpus:
         s = snap.get(g, {})
         hs = [h for h in holders if h["gpu"] == g]
         who = "; ".join(f"{'EXCL' if h['exclusive'] else 'shared'} {h['who']} pid{h['pid']} {render.age(time.time() - (h['since'] or time.time()))}"
                         for h in hs)
-        print(f"GPU{g}: use {s.get('use', '?')}% vram {s.get('vram', '?')}%  {who or 'free'}")
+        out.append(f"GPU{g}: use {s.get('use', '?')}% vram {s.get('vram', '?')}%  {who or 'free'}")
+    return out
 
 
 def cmd_report(a):
@@ -1265,7 +1160,7 @@ def cmd_report(a):
     final = max(cands, key=lambda v: v["speedup"]) if cands else None
     L = [f"# 报告：{st.id} — {t.get('title', '')}", "",
          f"- 目标：{t.get('goal', '')}（目标 {st.target:g}×，指标 {t['metric'].get('name')}，{t['metric'].get('direction')}）",
-         f"- 基线：`{(st.freeze or {}).get('base', '')}` · 生成：{render.hm(time.time())} · 本报告所有数字来自 mf 记录（mf audit 可复核）", ""]
+         f"- 基线：`{(st.freeze or {}).get('base', '')}` · 生成：{render.hm(time.time())} · 本报告所有数字来自 mf 记录（下面的审计从原始日志重算过）", ""]
     summ = [n for n in st.notes if n["kind"] == "summary"]
     if summ:
         L += ["## 摘要（agent）", *[f"- {n['title']}" for n in summ[-3:]], ""]
@@ -1304,24 +1199,41 @@ def cmd_report(a):
     al = [x for x in guard.alerts(st) if x["level"] in ("crit", "warn", "ask")]
     if al:
         L += ["## 未解决的预警", *[f"- {render.ICON[x['level']]} {x['msg']}" for x in al], ""]
-    L += ["## 复现", f"- 正确性：`{t['commands']['correctness']}`", f"- bench：`{t['commands']['bench']}`",
-          f"- 复核：`{MF} verify {st.id} --lane {final.get('lane') if final else '<lane>'} --attempt {final.get('attempt') if final else 'N'}`", ""]
+    problems = audit_problems(st)
+    L += ["## 审计（哈希链 + 从原始日志重算全部数字）",
+          "- 通过：事件日志未被改动，所有数字与原始日志一致" if not problems else f"- ✖ {len(problems)} 个问题：",
+          *[f"  - {x}" for x in problems], ""]
+    L += ["## 复现", f"- 正确性：`{t['commands']['correctness']}`", f"- bench：`{t['commands']['bench']}`", ""]
     path = tdir / "REPORT.md"
     atomic_write(path, "\n".join(L))
     append_event(tdir, "note", "生成报告 REPORT.md", by="mf", kind="report", file=str(path))
     print(path)
+    print("审计通过：哈希链完整，所有数字可从原始日志重算" if not problems else
+          "\n".join([f"✖ 审计发现 {len(problems)} 个问题："] + [f"  {x}" for x in problems]))
+    auto_phase(State(tdir), "report", "生成报告")
+    if a.done:
+        st = State(tdir)
+        cur = PHASES.index(st.phase) if st.phase in PHASES else 0
+        for p in PHASES[cur:PHASES.index("done")]:
+            r = 1 if p == "spec" else st.round
+            # a question still open blocks the end, except loop questions after the user asked to stop
+            if st.gate_mode(p) == "ask" and not st.gate_ok(p, r) and not (st.stop and p in LOOP_PHASES):
+                raise MfRefused(f"阶段 {p} 还在等用户确认（{gate_key(p, r)}）：先问用户，"
+                                f"答复后 `mf decide {st.id} --gate {gate_key(p, r)} \"...\"`，再 mf report {st.id} --done")
+        append_event(tdir, "phase", "完成", by="agent", phase="done", round=st.round)
+        print(f"{st.id}: done")
     _after(tdir)
+    return 1 if problems else 0
 
 
 # ---------------------------------------------------------------- knowledge, tools, install
 
 
 def cmd_kb(a):
-    if a.action == "index":
-        print(kb.index())
-    elif a.action == "lint":
+    if a.action == "check":
         probs = kb.lint()
         print("\n".join(probs) or "kb ok")
+        print(kb.index())
         return 1 if any("(warn)" not in p for p in probs) else 0
     elif a.action == "search":
         print("\n".join(kb.search(a.args)) or "no match")
@@ -1358,10 +1270,6 @@ def _tool_index(st: State = None) -> str:
                 if p.is_file() and p.suffix in (".py", ".sh"):
                     rows.append(f"- `{p}` — {_doc_line(p) or '（缺 docstring：第一行写用途+用法）'}")
     return "\n".join(rows)
-
-
-def cmd_tools(a):
-    print(_tool_index(_st(a.task) if a.task else None) or "no tools yet (put reusable scripts in <task>/tools/ with a one-line docstring)")
 
 
 def cmd_config(a):
@@ -1449,24 +1357,41 @@ def _ms_dispatch(a):
     return getattr(ms, f"cmd_{a.ms_cmd}")(a)
 
 
-def _doc_dispatch(a):
-    from myflow import ms
-    return getattr(ms, f"cmd_doc_{a.doc_cmd}")(a)
-
-
 # ---------------------------------------------------------------- parser
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Only the commands used in practice (user request 11-22). Who uses what:
+    you: status, serve, steer · orchestrator: new, set, brief, decide, freeze, ms, await, report ·
+    implementers: lane, try, run, note · setup: config, install-skills, selftest · knowledge: kb"""
     p = argparse.ArgumentParser(prog="mf", description="myflow: visible, verifiable, budgeted kernel optimization")
     p.add_argument("--version", action="version", version=f"myflow {__version__}")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", required=True, metavar="<command>")
 
     def cmd(name, fn, help_):
         sp = sub.add_parser(name, help=help_, description=help_)
         sp.set_defaults(func=fn)
         return sp
 
+    # -- you
+    s = cmd("status", cmd_status, "overview of all tasks; with a task: roadmap, alerts, lanes; M3 / A7: one milestone / attempt")
+    s.add_argument("task", nargs="?")
+    s.add_argument("item", nargs="?", help="M3 (milestone) or A7 (attempt)")
+    s.add_argument("--lane")
+    s.add_argument("--json", action="store_true")
+
+    s = cmd("serve", cmd_serve, "local web dashboard: renders Markdown, approve questions, leave messages")
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=8765)
+
+    s = cmd("steer", cmd_steer, "leave a message for the agents (they see it on their next mf call); --stop ends the work")
+    s.add_argument("task")
+    s.add_argument("text", nargs="+")
+    s.add_argument("--lane")
+    s.add_argument("--by", default="user", choices=["agent", "user"])
+    s.add_argument("--stop", action="store_true", help="no more attempts: the orchestrator closes up and reports")
+
+    # -- orchestrator
     s = cmd("new", cmd_new, "create a task (contract + SPEC.md + event log)")
     s.add_argument("id")
     s.add_argument("--repo", required=True)
@@ -1477,105 +1402,40 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--parent")
     s.add_argument("--from", dest="from_file", help="task.json template to start from")
 
-    s = cmd("set", cmd_set, "change task.json fields (logged; contract keys after freeze require re-freeze)")
+    s = cmd("set", cmd_set, "change task.json fields, budgets included (logged; contract keys after freeze need a re-freeze)")
     s.add_argument("task")
     s.add_argument("pairs", nargs="+", metavar="key=value")
     s.add_argument("--why")
     s.add_argument("--by", default="agent", choices=["agent", "user"])
 
-    s = cmd("budget", cmd_budget, "extend budgets, e.g. --attempts +10 (logged)")
-    s.add_argument("task")
-    s.add_argument("--attempts")
-    s.add_argument("--hours")
-    s.add_argument("--no-improve", dest="no_improve")
-    s.add_argument("--why")
-    s.add_argument("--by", default="agent", choices=["agent", "user"])
-
-    s = cmd("brief", cmd_brief, "short checkpoint summary (<=600 chars); --ask opens a user gate")
+    s = cmd("brief", cmd_brief, "report to the user (<=600 chars); --ask asks a question (gate); --gate KEY: you relayed mf's question")
     s.add_argument("task")
     s.add_argument("text", nargs="+")
     s.add_argument("--ask", action="store_true")
+    s.add_argument("--gate", action="append", metavar="KEY", help="a pending question opened by mf that you just asked the user")
     s.add_argument("--lane")
-    s.add_argument("--phase")
+    s.add_argument("--phase", help=argparse.SUPPRESS)
 
-    s = cmd("decide", cmd_decide, "record a decision; --gate KEY|auto resolves a pending gate")
+    s = cmd("decide", cmd_decide, "record the user's answer (--gate KEY|auto), a default under delegation, or a delegation")
     s.add_argument("task")
-    s.add_argument("text", nargs="+")
+    s.add_argument("text", nargs="+", help="the decision; with --delegate: the user's exact words")
     s.add_argument("--gate")
     s.add_argument("--quote", help="the user's exact words")
     s.add_argument("--by", choices=["agent", "user"])
-    s.add_argument("--default", action="store_true",
-                   help="decided by the default (recommended) option under the user's delegation (mf delegate)")
+    s.add_argument("--default", action="store_true", help="decided by the recommended option under the user's delegation")
+    s.add_argument("--delegate", type=float, metavar="HOURS",
+                   help="the user lets you decide by the defaults for HOURS (text = the user's words); 0 ends it")
 
-    s = cmd("delegate", cmd_delegate, "the user lets the orchestrator decide by the defaults for H hours")
-    s.add_argument("task")
-    s.add_argument("--hours", type=float)
-    s.add_argument("--quote", help="the user's exact words")
-    s.add_argument("--off", action="store_true")
-
-    s = cmd("asked", cmd_asked, "record that a pending gate was actually put to the user (orchestrator)")
-    s.add_argument("task")
-    s.add_argument("gates", nargs="+", metavar="gate")
-    s.add_argument("--via", default="chat", help="chat | form | web ...")
-
-    s = cmd("phase", cmd_phase, f"move to a phase: {' '.join(PHASES)}")
-    s.add_argument("task")
-    s.add_argument("phase")
-    s.add_argument("--brief", nargs="+")
-
-    s = cmd("stop", cmd_stop, "request stop: no more attempts, go integrate/report")
-    s.add_argument("task")
-    s.add_argument("reason", nargs="+")
-    s.add_argument("--by", default="user", choices=["agent", "user"])
-
-    s = cmd("freeze", cmd_freeze, "freeze baseline: base commit, oracle hashes, baseline metrics + noise")
+    s = cmd("freeze", cmd_freeze, "freeze the baseline: base commit, protected-file hashes, baseline metrics + noise")
     s.add_argument("task")
     s.add_argument("--repeats", type=int, default=None)
     s.add_argument("--base")
     s.add_argument("--gpu", type=int)
     s.add_argument("--timeout", type=int)
 
-    lane = cmd("lane", lambda a: a.lane_func(a), "manage lanes (parallel implementation lines)")
-    lsub = lane.add_subparsers(dest="lane_cmd", required=True)
-    s = lsub.add_parser("new", help="worktree + branch + brief for a new lane")
-    s.set_defaults(lane_func=cmd_lane_new)
-    s.add_argument("task")
-    s.add_argument("lane")
-    s.add_argument("--direction", required=True)
-    s.add_argument("--hyp")
-    s.add_argument("--from", dest="start", help="base (default) | <lane> (its best) | <commit>")
-    s.add_argument("--merge", help="integration: L1,L2@7 (best or given attempt of each lane)")
-    s = lsub.add_parser("set", help="set lane status")
-    s.set_defaults(lane_func=cmd_lane_set)
-    s.add_argument("task")
-    s.add_argument("lane")
-    s.add_argument("--status", required=True, choices=["active", "paused", "done", "abandoned", "blocked"])
-    s.add_argument("--reason", nargs="+")
-
-    s = cmd("try", cmd_try, "snapshot lane worktree, run frozen correctness + bench, record attempt")
-    s.add_argument("task")
-    s.add_argument("--lane", required=True)
-    s.add_argument("--idea", required=True)
-    s.add_argument("--hyp")
-    s.add_argument("--note")
-    s.add_argument("--quick", action="store_true", help="use commands.bench_quick (not counted toward best)")
-    s.add_argument("--no-bench", action="store_true", help="correctness only")
-    s.add_argument("--force", action="store_true", help="override budget guard (logged and shown to the user)")
-    s.add_argument("--timeout", type=int)
-
-    s = cmd("verify", cmd_verify, "independent re-measure: clean worktree, fresh seed, ABBA vs frozen baseline")
-    s.add_argument("task")
-    s.add_argument("--lane", required=True)
-    s.add_argument("--attempt", type=int)
-    s.add_argument("--pairs", type=int)
-    s.add_argument("--gpu", type=int)
-    s.add_argument("--timeout", type=int)
-    s.add_argument("--against", help="incremental ABBA vs a milestone (M3) or commit instead of the frozen base")
-
-    ms = cmd("ms", _ms_dispatch, "milestones: plan → prep → role (review) → close (tag + push); "
-                                 "show · push · drop · revoke · bootstrap")
+    ms = cmd("ms", _ms_dispatch, "milestones: plan → prep → review → close (commit + tag + push); bootstrap · push · drop · revoke")
     msub = ms.add_subparsers(dest="ms_cmd", required=True)
-    s = msub.add_parser("plan", help="plan card (≤10 lines); --ask opens this round's plan gate (before the freeze: the bootstrap gate)")
+    s = msub.add_parser("plan", help="plan card (≤10 lines); --ask asks the user (only needed off the pushed promise)")
     s.add_argument("task")
     s.add_argument("id", help="M1, M2, M5a ...")
     s.add_argument("--title")
@@ -1584,43 +1444,44 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--accept", help="acceptance criteria")
     s.add_argument("--expect", type=float, help="expected speedup vs the previous milestone, e.g. 1.10")
     s.add_argument("--basis", help="why we expect it: ceiling / ATT / Amdahl ...")
+    s.add_argument("--ceiling", type=float, help="upper-bound speedup estimate vs the frozen base (with --basis)")
     s.add_argument("--scope", help="modules / files it will touch")
     s.add_argument("--hours", type=float, help="estimated effort")
     s.add_argument("--tentative", action="store_true")
     s.add_argument("--why", help="why this differs from what the last push promised")
     s.add_argument("--ask", action="store_true")
-    s = msub.add_parser("bootstrap", help="new operator: a worktree to build the functional M0 before freeze")
+    s = msub.add_parser("bootstrap", help="new operator: a worktree to build the functional milestones before the freeze")
     s.add_argument("task")
     s.add_argument("--from", dest="start")
-    s = msub.add_parser("prep", help="pick the candidate, incremental ABBA vs the last milestone, integration worktree, role prompts")
+    s = msub.add_parser("prep", help="pick the candidate, measure what is missing, integration worktree, review prompt")
     s.add_argument("task")
     s.add_argument("id")
     s.add_argument("--lane")
     s.add_argument("--attempt", type=int)
-    s.add_argument("--bootstrap", action="store_true", help="candidate = the bootstrap worktree (M0 of a new operator)")
+    s.add_argument("--bootstrap", action="store_true", help="candidate = the bootstrap worktree (functional milestones)")
     s.add_argument("--size-why", help="reason to exceed milestone.max_lines (shown on the card)")
     s.add_argument("--regress-why", help="reason to accept cases that got slower than the previous milestone")
-    s.add_argument("--verify-why", help="user-approved reason to use the latest of disagreeing repeated verifies")
+    s.add_argument("--verify-why", help="user-approved reason to use the latest of disagreeing repeated measurements")
     s.add_argument("--pairs", type=int)
     s.add_argument("--gpu", type=int)
     s.add_argument("--timeout", type=int)
-    s = msub.add_parser("role", help="record the closing review (docs, coverage, missing tests, card); never code")
+    s = msub.add_parser("review", help="record the closing review (docs, coverage table, missing tests, card); never code")
     s.add_argument("task")
     s.add_argument("id")
-    s.add_argument("--role", default="review", choices=["review"], help="(kept for old prompts; the only role)")
-    s.add_argument("--result", default="done", choices=["done"], help="(kept for old prompts)")
     s.add_argument("--session", required=True, help="the review sub-agent's session / name")
     s.add_argument("--card", help="milestone card file (default: milestones/<M>/card.md)")
     s.add_argument("--tests-why", help="why changing or deleting existing tests/bench keeps the test principle "
                                        "(required then; goes into the commit message)")
     s.add_argument("-m", "--summary", default="", help="one-line conclusion of the review")
-    s = msub.add_parser("close", help="final commit (runtime tree = accepted candidate), correctness on it, tag, push")
+    s.add_argument("--role", default="review", choices=["review"], help=argparse.SUPPRESS)
+    s.add_argument("--result", default="done", choices=["done"], help=argparse.SUPPRESS)
+    s = msub.add_parser("close", help="final commit (code = accepted candidate), correctness on it, tag, push")
     s.add_argument("task")
     s.add_argument("id")
     s.add_argument("--next", action="append", required=True,
                    help="planned milestone id(s), first = committed; or done|report|stop|await-user")
     s.add_argument("--why", help="why the plan changed vs the last promise")
-    s = msub.add_parser("push", help="push closed milestones (branch + tags, atomic, fast-forward only)")
+    s = msub.add_parser("push", help="push closed milestones again (after a question was answered or a failure)")
     s.add_argument("task")
     s = msub.add_parser("drop", help="abandon a planned or closing milestone")
     s.add_argument("task")
@@ -1631,17 +1492,45 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("id")
     s.add_argument("--why", required=True, help="why it is taken back (shown on the dashboard)")
     s.add_argument("--discard", action="store_true", help="reset the bootstrap worktree even if it has uncommitted changes")
-    s = msub.add_parser("show", help="roadmap, or one milestone card")
-    s.add_argument("task")
-    s.add_argument("id", nargs="?")
 
-    doc = cmd("doc", _doc_dispatch, "entry document: render the mf-generated blocks")
-    dsub = doc.add_subparsers(dest="doc_cmd", required=True)
-    s = dsub.add_parser("render", help="fill <!-- mf:summary|roadmap|perf --> blocks")
+    s = cmd("await", cmd_await, "block (in the background) until something needs the orchestrator, or --max-min passes")
     s.add_argument("task")
-    s.add_argument("--file")
+    s.add_argument("--max-min", type=float, default=180, help="return anyway after this many minutes")
+    s.add_argument("--poll-s", type=float, default=60, help="seconds between checks")
 
-    s = cmd("run", cmd_run, "run any command logged into the task (profiling: --machine-exclusive)")
+    s = cmd("report", cmd_report, "REPORT.md + final.patch from verified records, with an audit of every number; --done ends")
+    s.add_argument("task")
+    s.add_argument("--lane")
+    s.add_argument("--done", action="store_true", help="mark the task done (after the user agreed)")
+
+    # -- implementers (lanes, bootstrap)
+    lane = cmd("lane", lambda a: a.lane_func(a), "lanes: parallel implementation lines, one git worktree each")
+    lsub = lane.add_subparsers(dest="lane_cmd", required=True)
+    s = lsub.add_parser("new", help="worktree + branch + brief for a new lane (default start: the latest milestone)")
+    s.set_defaults(lane_func=cmd_lane_new)
+    s.add_argument("task")
+    s.add_argument("lane")
+    s.add_argument("--direction", required=True)
+    s.add_argument("--from", dest="start", help="base | <lane> (its best) | M<k> | <commit>")
+    s.add_argument("--merge", help="integration: L1,L2@7 (best or given attempt of each lane)")
+    s = lsub.add_parser("set", help="set lane status (at the end: done / abandoned / blocked with the reason)")
+    s.set_defaults(lane_func=cmd_lane_set)
+    s.add_argument("task")
+    s.add_argument("lane")
+    s.add_argument("--status", required=True, choices=["active", "paused", "done", "abandoned", "blocked"])
+    s.add_argument("--reason", nargs="+")
+
+    s = cmd("try", cmd_try, "snapshot the lane worktree, run the frozen correctness + bench, record the attempt")
+    s.add_argument("task")
+    s.add_argument("--lane", required=True)
+    s.add_argument("--idea", required=True)
+    s.add_argument("--note")
+    s.add_argument("--quick", action="store_true", help="use commands.bench_quick (not counted toward best)")
+    s.add_argument("--no-bench", action="store_true", help="correctness only")
+    s.add_argument("--force", action="store_true", help="override budget guard (logged and shown to the user)")
+    s.add_argument("--timeout", type=int)
+
+    s = cmd("run", cmd_run, "run any command logged into the task, with a GPU lease (profiling: --machine-exclusive)")
     s.add_argument("task")
     s.add_argument("--lane")
     s.add_argument("--gpu", help="auto | none | N")
@@ -1652,92 +1541,21 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--tail", type=int, default=20)
     s.add_argument("cmd", nargs="*", help="the command, after --")
 
-    s = cmd("hyp", cmd_hyp, "hypothesis ledger: add 'text' --predict ... | set H1 confirmed --evidence ...")
-    s.add_argument("task")
-    s.add_argument("action", choices=["add", "set"])
-    s.add_argument("args", nargs="+")
-    s.add_argument("--predict")
-    s.add_argument("--test")
-    s.add_argument("--evidence")
-    s.add_argument("--lane")
-
-    s = cmd("ceiling", cmd_ceiling, "record an upper-bound speedup estimate (roofline/Amdahl) and its basis")
-    s.add_argument("task")
-    s.add_argument("value", type=float)
-    s.add_argument("basis", nargs="+")
-
-    s = cmd("note", cmd_note, "attach a detail note/file (L2/L3)")
+    s = cmd("note", cmd_note, "write it down: what you are doing (default), --kind finding|deadend|..., --ack N for a message")
     s.add_argument("task")
     s.add_argument("title", nargs="+")
     s.add_argument("--lane")
-    s.add_argument("--kind", default="info", choices=["info", "finding", "lesson", "deadend", "summary", "survey", "plan"])
+    s.add_argument("--kind", default="ping",
+                   choices=["ping", "finding", "deadend", "lesson", "survey", "plan", "summary", "info"],
+                   help="ping (default) = what I am doing now; finding / deadend / survey / plan / summary / lesson = progress")
     s.add_argument("--file")
+    s.add_argument("--ack", type=int, metavar="N", help="the user's message #N was handled like this")
 
-    s = cmd("ping", cmd_ping, "say what you are doing now (liveness; shown as 最近动作)")
-    s.add_argument("task")
-    s.add_argument("text", nargs="+")
-    s.add_argument("--lane")
-
-    s = cmd("await", cmd_await, "orchestrator: block (in the background) until something needs you, or --max-min passes")
-    s.add_argument("task")
-    s.add_argument("--max-min", type=float, default=180, help="return anyway after this many minutes")
-    s.add_argument("--poll-s", type=float, default=60, help="seconds between checks")
-
-    s = cmd("steer", cmd_steer, "leave a message for the agents (shown on their next mf call)")
-    s.add_argument("task")
-    s.add_argument("text", nargs="+")
-    s.add_argument("--lane")
-    s.add_argument("--by", default="user", choices=["agent", "user"])
-
-    s = cmd("ack", cmd_ack, "acknowledge a steer message and say how it was handled")
-    s.add_argument("task")
-    s.add_argument("n", type=int)
-    s.add_argument("how", nargs="+")
-    s.add_argument("--lane")
-
-    s = cmd("status", cmd_status, "L0 overview of all tasks")
-    s.add_argument("--json", action="store_true")
-
-    s = cmd("show", cmd_show, "L1 task view, or L2 with --attempt / --lane")
-    s.add_argument("task")
-    s.add_argument("--attempt", type=int)
-    s.add_argument("--lane")
-    s.add_argument("--json", action="store_true")
-
-    s = cmd("tail", cmd_tail, "recent events")
-    s.add_argument("task")
-    s.add_argument("-n", type=int, default=25)
-
-    s = cmd("watch", cmd_watch, "refreshing terminal view")
-    s.add_argument("task", nargs="?")
-    s.add_argument("--interval", type=float, default=10)
-
-    s = cmd("render", cmd_render, "regenerate STATUS.md / dashboard.html / index.html")
-    s.add_argument("task", nargs="?")
-
-    s = cmd("serve", cmd_serve, "local web dashboard with steer/approve forms")
-    s.add_argument("--host", default="127.0.0.1")
-    s.add_argument("--port", type=int, default=8765)
-
-    s = cmd("guard", cmd_guard, "print alerts; exit 0 ok / 1 warn|ask / 2 crit")
-    s.add_argument("task")
-
-    s = cmd("audit", cmd_audit, "verify hash chain and re-derive all numbers from raw logs")
-    s.add_argument("task")
-
-    cmd("gpu", cmd_gpu, "GPU telemetry and myflow leases")
-
-    s = cmd("report", cmd_report, "generate REPORT.md + final.patch from verified records")
-    s.add_argument("task")
-    s.add_argument("--lane")
-
-    s = cmd("kb", cmd_kb, "knowledge cards: index | lint | search WORDS | new NAME --kind K")
-    s.add_argument("action", choices=["index", "lint", "search", "new"])
+    # -- knowledge, setup
+    s = cmd("kb", cmd_kb, "knowledge cards: search WORDS | new NAME --kind K | check (lint + index)")
+    s.add_argument("action", choices=["search", "new", "check"])
     s.add_argument("args", nargs="*")
     s.add_argument("--kind", default="technique")
-
-    s = cmd("tools", cmd_tools, "list reusable scripts (task tools/ and global tools/)")
-    s.add_argument("task", nargs="?")
 
     s = cmd("config", cmd_config, "show / set data locations: home (registry, overview), tasks_dir (new tasks), lock_dir")
     s.add_argument("items", nargs="*", metavar="key=value")
@@ -1761,6 +1579,8 @@ def main(argv=None) -> int:
     if argv and argv[0] == "run" and "--" in argv:  # `mf run <task> [opts] -- <cmd...>`: options stay options
         i = argv.index("--")
         argv, tail = argv[:i], argv[i + 1:]
+    if argv[:2] == ["ms", "role"]:  # old prompts: the closing review used to be one of several roles
+        argv[1] = "review"
     args = build_parser().parse_args(argv)
     if tail is not None:
         args.cmd = tail

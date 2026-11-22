@@ -1,89 +1,147 @@
-# myflow — 长时间 GPU kernel 优化的轻量 harness
+# myflow — 长时间 GPU kernel / 新算子开发的轻量流程
 
-把“多轮、多 agent、长时间”的 kernel 优化变成**看得见、数字可信、不会无限跑下去**的流程。
-纯 Python 标准库（≥3.8）、零依赖；代码在 `/opt/myflow`，数据在 `~/.myflow`，不改你的仓库（每条线一个 git worktree）。
+让 agent 按**里程碑**开发或优化 kernel：每个里程碑是 GitHub 上的一个提交，性能数字由 mf 测出、可从原始日志重算，你只在少数几个点回答问题。
+纯 Python 标准库（≥3.8）、零依赖；不改你的仓库（每条实现线一个 git worktree）。
 
-| 你的诉求 | myflow 的做法 |
+你只需要看三样东西：
+1. **GitHub 上的里程碑提交**：一个里程碑 = 一个提交 + tag。提交信息写做了什么、为什么、与计划的差异、覆盖、性能、下一步，末尾链接到该 tag 下的入口文档。
+2. **入口文档**（一个文件）：原理与设计、接口、测试覆盖表、性能与基线 / 对照的来源。每个里程碑由一个独立的复核子 agent 核对一次。
+3. **测试覆盖表**：每条用例覆盖什么，精度 / 性能测试覆盖不了的项单列；不看代码也能判断可靠性。
+
+## 安装
+```bash
+ln -s /opt/myflow/bin/mf /usr/local/bin/mf   # 可选：放进 PATH（否则用 /opt/myflow/bin/mf）
+mf install-skills --user                      # 5 个 skill 链接到 ~/.copilot/skills、~/.claude/skills（或 --project <repo>）
+mf config tasks_dir=/data/myflow/tasks        # 可选：任务数据放到别处（mf config 查看当前值与来源）
+examples/toy/demo.sh                          # 可选：约 10 秒的 CPU 演示，然后 MYFLOW_HOME=~/.myflow-demo/home mf status demo
+```
+
+## 如何使用（以试点任务 moe-ptpc-a8w4 的实际过程为例）
+
+**1. 用一句话开始。** 说清做什么、对标什么、推到哪里：
+> 用 myflow 按里程碑开发 pyhip 的 MoE A8W4（PTPC）算子，功能正确，性能对标 aiter_ptpc，推送到 github.com/luocheng25/pyhip
+
+编排 agent 按 skill `myflow-kernel-opt` 工作：建任务（`mf new`），读代码，写 `SPEC.md`。
+
+**2. 需求确认：唯一一次必答的问题。** agent 一次问齐五件事：
+- 它的理解与假设；
+- 待你回答的问题；
+- 性能目标与对照来源；
+- 精度参考；
+- 推送目标（URL + 分支）。
+
+你回答（或说“按建议”），它用 `mf decide --gate spec` 记下你的原话。批准需求就同时批准了推送目标，之后推送不再单独问。
+
+**3. 功能里程碑（新算子先做功能版）。** 实现者在 bootstrap worktree 做出功能正确的版本，带用例和文档骨架。每个里程碑这样收尾：
+1. `mf ms prep`：在干净 worktree 跑功能用例；
+2. 派 1 个独立的复核子 agent：核对入口文档，补测试覆盖表和缺的用例，写卡片，只做一次；
+3. `mf ms close`：提交 + tag + 推送，提交信息写明下一步。
+
+复核进行的同时，下一个里程碑已经开工（流水线）。
+试点：M0 把上游 gfx9_fp8 kernel 更新到同名文件，M1 是 decode 路径，M2 是 prefill 路径。
+
+**4. 冻结基线，再一轮轮做性能。** `mf freeze` 以最新的里程碑为基线，测出逐 case 数字和噪声；性能目标由对照（如 aiter_ptpc）换算。每一轮分四步：
+- **计划**：`mf ms plan` 写计划卡，含预期、依据、上限估计。第一次计划和偏离上次推送承诺的计划会问你；与承诺一致的只通知。
+- **并行实现**：每个方向一条 lane（独立 worktree）。子 agent 用 `mf try` 提交尝试，跑冻结的正确性测试和 bench，得到自测数字。
+- **验收**：`mf ms prep` 在干净 worktree、换随机种子，在同一张卡上交替测量冻结基线、上一里程碑和候选。
+  性能型里程碑必须比上一个里程碑快。自测数字复现不了的（例如靠未提交的文件变快）会被识破。
+- **收尾**：同第 3 步：一个复核，然后提交 + tag + 推送。
+
+试点结果：M3（T=1024 prefill）提速 1.238×；M4（TP2 T=16 decode）再提速 1.074×，16 个 case 都在 aiter_ptpc 的 1.053× 以内；M5/M6 整理入口文档。
+
+**5. 过程中你看什么。**
+
+| 想知道 | 看哪里 |
 |---|---|
-| 1 防走偏、可视化 | 分层视图 L0→L3（全部由事件自动生成）＋ **里程碑路线图与方向检查** ＋ 需求/计划 gate ＋ 早预警 ＋ 双向窗口（批准、留言） |
-| 2 重复任务一致 | 每个重复步骤是一条 `mf` 命令；命令、环境、解析、范围写进冻结的 `task.json` 契约 |
-| 3 可扩展、积累经验 | 5 个精炼 skill；经验卡 + 生成的索引；任务内 `tools/` 脚本自动列入 lane brief |
-| 4 多任务并行 | lane = 独立 worktree + 独立缓存目录；flock GPU 租约（计时独占、正确性共享、PMC 全机独占）；全局总览 |
-| 5 防谎报性能 | 数字只由脚本产生；冻结 oracle 哈希；干净 worktree + 换种子 + 同卡 ABBA 复核；哈希链 + 原始日志重算审计 |
-| 6 防卡死 | 超时杀整个进程组；尝试/时间预算；按 lane 的“连续无提升”上限；心跳过期告警；上限估计低于目标先问人 |
-| 7 优化的流程 | spec → freeze → survey → plan → implement ⇄ verify → 收尾里程碑（推送）→ report（参考 GEAK，见 docs/DESIGN.md、docs/DESIGN-v2-milestones.md） |
-| 8 轻量 | 一个 `mf` 命令；`mf new --repo <任意仓库>` 即用；skills 可装到任何 agent（Copilot / Claude / Codex） |
+| 完成了哪些里程碑，各改了什么、为什么 | GitHub 分支上的里程碑提交（tag `<任务>-M<k>`）；提交信息末尾是该 tag 下渲染好的入口文档链接 |
+| 原理、接口、覆盖了哪些情况、基线从哪来 | 入口文档（试点：`src/pyhip/ops/moe/flydsl/a8w4_ptpc/README.md`） |
+| 现在在做什么、有没有跑偏 | `mf status <任务>`：路线图（✅ 已推送 · 🔄 收尾中 · ⏳ 承诺）、方向检查（承诺兑现、预测偏差、规模、收益曲线…）、提醒 |
+| 某个里程碑 / 某次尝试的细节 | `mf status <任务> M3` · `mf status <任务> A7` |
+| 网页 | `mf serve`：看板、渲染 Markdown、直接批准问题、给 agent 留言（VS Code Remote 需在 Ports 面板转发端口） |
 
-## 30 秒看效果
-```bash
-/opt/myflow/examples/toy/demo.sh            # CPU 演示（~10 秒）：3 条 lane、失败、超时、停滞、被复核识破的虚高、一个推送了的里程碑、待确认 gate
-MYFLOW_HOME=~/.myflow-demo/home /opt/myflow/bin/mf status
-MYFLOW_HOME=~/.myflow-demo/home /opt/myflow/bin/mf ms show demo     # 路线图 + 方向检查
-MYFLOW_HOME=~/.myflow-demo/home /opt/myflow/bin/mf serve    # 浏览器打开 http://127.0.0.1:8765/（VS Code Remote 需在 Ports 面板转发）
-/opt/myflow/bin/mf selftest                 # 自测（CPU，约 15 秒）
-```
+agent 是否在推进，由证据判断，不看它的自述：
 
-## 在任何工程里使用
-```bash
-ln -s /opt/myflow/bin/mf /usr/local/bin/mf  # 可选：放进 PATH
-mf install-skills --user                     # 或 --project <repo>：把 5 个 skill 链接到 ~/.copilot/skills、~/.claude/skills
-mf config tasks_dir=/data/myflow/tasks       # 可选：任务数据放到别处（还有 home、lock_dir；mf config 查看当前值与来源）
-```
-然后对 agent 说：“用 myflow 优化 `<仓库>` 里的 `<kernel>`，目标 `<X>×`，参考 `<repo1>,<repo2>` 的同类实现”
-（新算子：“用 myflow 按里程碑开发 `<算子>`”）。
-编排 agent 会按 skill `myflow-kernel-opt` 走流程；在 spec 和 plan 两个 gate 停下来问你，首次推送前也会问你推送目标。
+| 信号 | 含义 |
+|---|---|
+| `stale` | 什么活动都没有（可能卡死或退出） |
+| `spin` | 还在调用 mf，但没有进展记录，文件也没动（原地打转） |
+| `no_record` | 文件在改但没记录（在干活） |
+| `await_user` | 在等你答复 |
+| `no_report` | 有进展，但超过 60 分钟没向你汇报 |
 
-## 可视化：路线图 + 分层视图 + 一个双向窗口
-| 层 | 回答的问题 | 在哪看 |
+mf 挂起的问题，agent 30 分钟内没有转达给你，会升为严重预警。
+
+**6. 过程中你做什么（只在需要时）。**
+
+| 情况 | 你说 / 做 | mf 里的记录 |
 |---|---|---|
-| L0 总览 | 每个任务：阶段、健康、最佳复核/自测、目标进度、预算、**里程碑进度与下一步**、最后活动、**需要你做什么** | `mf status` · `~/.myflow/STATUS.md`（VS Code Markdown 预览会自动刷新）· `index.html` |
-| L1 任务 | **路线图**（✅ 已推送 · 🔄 收尾中 · ⏳ 承诺）、**方向检查**、阶段条、需要你处理、KPI、性能轨迹图（自测○ / 复核◆ / 失败×）、预警、brief、lanes、假设台账、决策 | `mf show <id>` · `mf ms show <id>` · `STATUS.md` · `dashboard.html` |
-| L2 里程碑 | 计划卡（预期与依据）、候选与运行时树、增量 / 累计性能、复核记录、**里程碑卡**、提交 / tag | `mf ms show <id> M3` · 看板里点开某个里程碑 · GitHub 上的提交信息 |
-| L3 尝试 | 想法、提交与 diff、正确性/门禁、逐 case 数字、复核记录 | `mf show <id> --attempt N` · 看板里点开某次尝试 |
-| L4 原始 | 每次运行的完整日志、diff.patch、abba.json、events.jsonl | 看板链接 · `runs/` 目录 |
+| agent 问你问题 | 回答 | `mf decide <任务> --gate <key> "…" --quote "<你的原话>"` |
+| 补充要求或纠正方向 | 直接告诉 agent，或 `mf steer <任务> "…"` | agent 处理后回执 `mf note <任务> --ack N "…"` |
+| 已推送的里程碑做错了（试点：“M0 移植方式错误，按 … 重做”） | 告诉 agent | `mf ms revoke` 撤回最近一个里程碑，同一编号重做；覆盖远端前问你 |
+| 要离开一段时间（“接下来 10 小时有问题按默认值进行”） | 告诉 agent | `mf decide <任务> --delegate 10 "<原话>"`；代决的事单独列出，你回来先看 |
+| 停止 | `mf steer <任务> --stop "…"` | 不再开始新尝试，编排者收尾并出报告 |
 
-- **里程碑**（设计见 `docs/DESIGN-v2-milestones.md`）：一个可评审的完整改动 = 一个提交 + tag，推送到你批准的 fork；
-  提交信息就是卡片（做了什么 / 为什么 / 与计划的差异 / 覆盖 / 已知问题 / 性能 / 下一步）。GitHub 不渲染提交信息里的 Markdown，
-  所以 mf 把卡片转成纯文本，并附上该 tag 下入口文档的链接（渲染版：本里程碑一节、测试覆盖、性能与基线来源）。
-  性能型必须对**上一个里程碑**做同卡 ABBA 且 improved；
-  收尾默认只派 1 个独立复核（skill `myflow-review`，只做一次、直接改不打回）：写 / 核对入口文档的本里程碑一节、基线与对照来源和测试覆盖表、
-  补缺的用例、填卡片。它只能改文档和用例：改动 / 删除已有用例不用你批准，但要 `--tests-why` 说明为何符合测试原则（写进提交信息），
-  违反原则才问你。推送的提交与验收的候选运行时树逐 blob 相同，并在最终提交上重跑功能用例。
-- **方向检查**：目标对齐 · 承诺兑现（上次推送说的下一步 vs 这次做的）· 预测偏差（实测 / 预期）· 规模 · 质量 · 收益曲线 · 时间 · 未推送。
-- **gate**：spec、plan（每轮）默认 `ask`——agent 用 ≤600 字的 brief 复述理解、假设和问题，等你确认后才能往下走。
-  推送目标随需求一起确认（批准 spec 即批准推送到当时设置的 URL + 分支），之后不再单独问；目标变了或要覆盖远端时，mf 才挂起 gate。
-  这类 gate 只是记录：编排者在对话里问过你之后要 `mf asked`，否则看板标“agent 尚未转达给你”，30 分钟后升为 crit。
-- **网页**：`mf serve` 把卡片、笔记、入口文档等 Markdown 渲染成网页（文件链接加 `?raw=1` 看原文）；STATUS.md 用 VS Code 的 Markdown 预览看。
-- **早预警**（每次 `mf` 调用都会打印给 agent，也显示在看板）：需求未确认 / SPEC 确认后被改 / 目标或预算被改 / lane 停滞 /
-  自测未被复核复现 / 改了 oracle 或越界 / 超时 / 上限估计低于目标 / 留言未处理 / 方向检查的信号 / gate 未转达 / 有进展没汇报。
-- **是否在推进**由证据判定（不看自述）：`stale` 无任何活动 · `spin` 还在调 mf 但长时间没有进展、文件也没动（原地打转）·
-  `no_record` 文件在改但没记录（在干活）· `await_user` 在等你回复 · `no_report` 有进展但超过 60 分钟没向你汇报（看板显示“最后向你汇报 N 前”）。
-- **双向窗口**：`mf serve` 页面上可直接批准 gate、给 agent 留言；或命令行 `mf steer <id> "…"`。agent 下一次调用任何 `mf` 命令就会看到，并需 `mf ack` 回执。
+**7. 结束。** agent 写 ≤3 行摘要，然后：
+1. 运行 `mf report` 生成 REPORT.md：最终数字、里程碑、死路与经验、决策。报告附审计：所有数字从原始日志重算，并检查哈希链完整。
+2. 用 skill `myflow-learn` 沉淀 ≤3 张经验卡。
+3. 你同意后，`mf report <任务> --done`。
 
-## 流程（skill `myflow-kernel-opt` 的骨架）
-阶段由动作自动推进（`ms plan` / `lane new` / `ms prep` / `ms close --next report`），只有结束时 `mf phase <id> done`。
-- 计划：与上次推送承诺的下一步一致时只通知，偏离或改了目标才问你。
-- 流水线：`ms prep` 后下一个里程碑立即开工，复核同时进行；下一个 prep 时 mf 自动合并上一个收尾提交，并校验代码不变。
-- 验收：prep 自己补测缺的数字，两个都缺时做一次三方交替测量（冻结基线 / 上一里程碑 / 候选）；集成 lane 不用 `mf try`。
-- 功能用例：同一份代码和用例在干净 worktree 里只跑一次，结果复用。
+## 命令（19 个；`mf <cmd> -h` 看参数）
+| 谁用 | 命令 | 用途 |
+|---|---|---|
+| 你 | `status [任务] [M3\|A7] [--lane L]` | 总览 / 任务 / 里程碑 / 尝试 / lane |
+| | `serve` | 网页看板：渲染 Markdown、批准问题、留言 |
+| | `steer <任务> "…" [--stop]` | 给 agent 留言；`--stop` 结束工作 |
+| 编排者 | `new` · `set key=value [--why]` | 建任务；改 task.json（目标、预算、范围、推送目标……，改动显示在看板） |
+| | `brief "…" [--ask] [--gate KEY]` | 向你汇报；`--ask` 提问；`--gate`：已把 mf 挂起的问题转达给你 |
+| | `decide "…" [--gate KEY\|auto] [--quote] [--default] [--delegate H]` | 记录你的答复；授权期内按默认值代决；记录授权 |
+| | `freeze` | 冻结基线 |
+| | `ms plan\|bootstrap\|prep\|review\|close\|push\|drop\|revoke` | 里程碑：计划 → 验收 → 复核 → 提交推送；放弃 / 撤回 |
+| | `await` | 后台等到需要编排者处理（问题待转达、留言、该汇报、卡住） |
+| | `report [--done]` | 报告 + 审计；`--done` 结束任务 |
+| 实现者 | `lane new\|set` | 开 / 关一条实现线（独立 worktree） |
+| | `try --lane L --idea "…"` | 提交一次尝试：冻结的正确性测试 + bench |
+| | `run -- <cmd>` | 在任务里记录任意命令（profiling），带 GPU 租约 |
+| | `note "…" [--kind K] [--ack N]` | 不带 `--kind`：在做什么（证明活着）；`--kind finding\|deadend\|survey\|plan\|summary\|lesson`：进展；`--ack N`：处理了留言 #N |
+| 设置 | `kb search\|new\|check` · `config` · `install-skills` · `selftest` | 经验卡；数据位置；安装 skill；自测 |
 
-```
-spec ─gate→ [新算子：bootstrap M0] → freeze → survey → plan ─gate→ implement(lanes ∥) ⇄ verify → 收尾 M_k → report → done
-  对齐需求       功能正确版+用例+文档      冻结基线   调研同类   计划卡+分线      每条 lane 一个子 agent   官方数字   复核+提交+推送
-                                                         ↑──────────────── 未达标且预算未尽：下一轮 R2 ────────────────┘
-```
+退出码：0 成功 · 1 检查未通过（审计）· 2 错误 · 3 被守卫拒绝（预算、问题未答、已停止、停滞、收尾条件未满足）。
 
-## 命令速查（`mf <cmd> -h` 看参数）
-| 类别 | 命令 |
+<details><summary>旧命令对照（11-22 精简前的写法）</summary>
+
+| 旧 | 新 |
 |---|---|
-| 任务 | `new` `set key=value` `budget --attempts +10` `phase <p> --brief` `brief [--ask]` `asked <gate>` `decide --gate <key> [--default]` `delegate --hours H --quote …`（你不在时按默认值决定，代决事项单独列出） `await`（后台等到需要编排者处理） `stop` |
-| 测量 | `freeze [--base M0]` · `lane new/set` · `try --lane L --idea` · `verify --lane L [--attempt N] [--against M3]` · `run -- <cmd>` · `gpu` |
-| 里程碑 | `ms plan <id> M3 --title … --expect 1.1 --basis …` · `ms prep <id> M3 --lane L` · `ms role <id> M3 --session … --card …`（复核） · `ms close <id> M3 --next M4` · `ms push` · `ms drop` · `ms revoke`（撤销最近收尾的，重做同一编号） · `ms show` · `ms bootstrap` · `doc render` |
-| 台账 | `hyp add/set` · `ceiling X "依据"` · `note [--file]` · `ping "在做什么"` · `steer` · `ack` |
-| 查看 | `status` · `show [--attempt N/--lane L]` · `tail` · `watch` · `render` · `serve` · `guard` · `audit` · `report` |
-| 经验 / 设置 | `kb index/lint/search/new` · `tools` · `install-skills` · `config [home=… tasks_dir=… lock_dir=…]` · `selftest` |
+| `phase <p>` | 阶段随动作自动推进；结束用 `report --done` |
+| `asked <id> <key>` | `brief <id> --gate <key> "问了什么"` |
+| `delegate --hours H --quote "…"` / `--off` | `decide <id> --delegate H "<原话>"` / `--delegate 0 "…"` |
+| `ping "…"` · `ack <id> N "…"` | `note "…"` · `note <id> --ack N "…"` |
+| `stop "…"` | `steer <id> --stop "…"` |
+| `budget --attempts +N` | `set <id> budget.max_attempts=<N> --why "…"` |
+| `verify` | `ms prep` 自己复核候选 |
+| `ceiling X "依据"` | `ms plan … --ceiling X --basis "…"` |
+| `hyp add/set` | `note --kind plan\|finding\|deadend`（写明证据 A7 / V3） |
+| `show` · `ms show` · `tail` · `watch` · `render` · `guard` · `gpu` | `status`（`status <id> M3`、`status <id> A7`、`--lane`） |
+| `audit` | `report`（每次都审计） |
+| `ms role` | `ms review`（旧写法仍可用） |
+| `doc render` | prep / close 自动渲染 |
+| `kb index` · `kb lint` | `kb check` |
+| `tools` | lane brief 自动列出任务的 `tools/` 脚本 |
 
-退出码：0 成功 · 2 错误 · 3 被守卫拒绝（预算、gate、停止、停滞、收尾条件未满足）。
+</details>
+
+## 为什么数字可信、不会跑偏
+- **数字只由 mf 产生**：`mf try` 给自测数字；`mf ms prep` 在干净 worktree、换种子、同卡交替测量，给官方数字。
+  正确性测试和 bench 在冻结时记下哈希，改了就判 `oracle_modified`。事件日志是哈希链，`mf report` 从原始日志重算全部数字。
+- **推送的就是验收过的**：推送提交的运行时代码与验收的候选逐 blob 相同，并在最终提交上重跑功能用例。复核只能改文档和用例。
+  改动 / 删除已有用例不用你批准，但必须用 `--tests-why` 说明符合测试原则：
+  - 刚好覆盖：已有的精度 / 性能测试能覆盖的不单独写，但不缺失；
+  - 违反原则（例如放宽容差）才问你。
+- **不会无限跑下去**：
+  - 尝试 / 时间预算；
+  - 每条 lane 的“连续无提升”上限；
+  - 超时杀掉整个进程组；
+  - 上限估计低于目标时，先问你是否调整目标；
+  - 方向检查：承诺兑现、预测偏差、收益曲线等。
 
 ## task.json 契约（关键字段）
 ```jsonc

@@ -236,7 +236,7 @@ class Lease:
                                                     "exclusive": self.exclusive}))
                 return self
             if time.time() > deadline:
-                raise MfError(f"no GPU in pool {self.pool} became free within {self.wait_s}s (see: mf gpu)")
+                raise MfError(f"no GPU in pool {self.pool} became free within {self.wait_s}s (see: mf status)")
             if not told:
                 print(f"[mf] all GPUs in pool {self.pool} are leased; waiting ...", file=sys.stderr, flush=True)
                 told = True

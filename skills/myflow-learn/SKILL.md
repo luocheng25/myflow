@@ -20,7 +20,7 @@ description: >-
    - 数字用相对值（×、%、占峰值 %）；确实需要绝对值时在 frontmatter 加 `notes: absolute-ok`。
    - pitfall / dead-end 写成“症状 → 原因 → 解决”；technique 写“场景 → 做法 → 怎么验证”。
    - `evidence` 写任务名与 A/V 编号或文件路径；`applies` 写清 arch、DSL、kernel 类型、dtype。
-4. `mf kb lint && mf kb index`（`INDEX.md` 是生成文件，不要手改）。
+4. `mf kb check`（检查卡片并重建 `INDEX.md`；它是生成文件，不要手改）。
 
 ## 读
 - 调研前先读 `/opt/myflow/knowledge/INDEX.md`，按语义挑卡片再打开。

@@ -324,6 +324,12 @@ def append_event(tdir: Path, kind: str, title: str = "", /, lane=None, by: str =
         if data:
             ev["data"] = data
         ev["prev"] = sha16(last) if last else "0" * 16
+        head = tdir / ".events.head"
+        if last and head.exists():
+            seen = head.read_text().strip()
+            if seen != f"{json.loads(last).get('seq')} {sha16(last)}":
+                # the last line was edited by hand: chaining onto it must not erase that evidence
+                ev["head_mismatch"] = seen
         line = json.dumps(ev, ensure_ascii=False, separators=(",", ":"))
         with open(path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
@@ -364,6 +370,9 @@ def audit_chain(tdir: Path) -> list:
                 problems.append(f"line {i} (seq {ev.get('seq')}): hash chain broken (edited or reordered)")
             if ev.get("seq") != i:
                 problems.append(f"line {i}: seq {ev.get('seq')} != {i}")
+            if ev.get("head_mismatch"):
+                problems.append(f"line {i} (seq {ev.get('seq')}): appended after the previous line stopped matching "
+                                f".events.head ({ev['head_mismatch']}): that line was edited by hand")
             prev_line = raw
     head = tdir / ".events.head"
     if prev_line is not None and head.exists():
@@ -402,7 +411,7 @@ class State:
         self.revoked = []  # closed milestones taken back (mf ms revoke); their ids can be planned again
         self.oracle_accepts = []
         self.bootstrap = None
-        self.delegation = None  # user: "decide by the defaults until <time>" (mf delegate)
+        self.delegation = None  # user: "decide by the defaults until <time>" (mf decide --delegate)
         self.checks = {}  # correctness passes in clean worktrees, by code+tests key (user request 11-22: run once)
         self.progress_ts, self.last_report_t = [], None
         self.created_t = self.events[0]["t"] if self.events else time.time()
@@ -429,7 +438,7 @@ class State:
             self.briefs.append(item)
             if item["ask"] and not lane:
                 # a question the orchestrator writes is asked when written; one opened by mf itself (push, oracle)
-                # still has to be relayed to the user by the orchestrator (mf asked)
+                # still has to be relayed to the user by the orchestrator (mf brief --gate)
                 self.gates[gate_key(item["phase"], item["round"])] = {
                     "state": "pending", "brief": item["text"], "t": ev["t"], "phase": item["phase"],
                     "asked_t": ev["t"] if ev["by"] != "mf" else None}
@@ -672,7 +681,7 @@ class State:
         return [dict(g, key=k) for k, g in self.gates.items() if g.get("state") == "pending"]
 
     def delegated(self, now=None):
-        """The user's standing delegation (mf delegate) if still in force: questions are decided by the defaults."""
+        """The user's standing delegation (mf decide --delegate) if still in force: questions are decided by the defaults."""
         d = self.delegation
         return d if d and (now if now is not None else time.time()) < d["until"] else None
 

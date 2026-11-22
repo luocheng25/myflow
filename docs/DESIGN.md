@@ -28,11 +28,11 @@ myflow 的取舍：**把 GEAK 的“可信执行”机制压缩成一个 stdlib 
 | 时间点 | 典型走偏 | 拦截手段 |
 |---|---|---|
 | 开始 15 分钟 | 需求理解错、指标/case 不对、范围不清 | **spec gate**：SPEC.md 第 7 节“我的理解与假设”、第 8 节“待你回答的问题”；未确认就离开 spec → crit；确认后 SPEC 被改 → warn |
-| 每次换阶段 | 闷头做、方向选错 | `mf phase --brief`：做完了什么 / 下一步 / 风险，三行出现在看板顶部；**plan gate** 每轮一次 |
-| 规划时 | 目标物理上达不到 | `mf ceiling`：上限估计 < 目标 → “需要你确认” |
+| 每次换阶段 | 闷头做、方向选错 | `mf brief`（阶段随动作自动推进）：做完了什么 / 下一步 / 风险，三行出现在看板顶部；**plan gate** 每轮一次 |
+| 规划时 | 目标物理上达不到 | `mf ms plan --ceiling`：上限估计 < 目标 → “需要你确认” |
 | 实现中 | 原地打转、反复失败、卡死、虚报 | 按 lane 的无提升计数、连败计数、超时、心跳过期、自测未复现、改 oracle/越界、阶段停留过久 |
 | 目标被挪动 | 悄悄降低目标或放宽范围 | `mf set` 记录 old→new（谁、为什么）；绕过 `mf` 直接改 task.json → warn；改度量契约 → crit 并要求重新冻结 |
-| 任意时刻 | 你想纠偏 | **留言**（看板或 `mf steer`）：agent 下一次调用任何 mf 命令必看到，需 `mf ack` 回执；10 分钟未回执 → warn |
+| 任意时刻 | 你想纠偏 | **留言**（看板或 `mf steer`）：agent 下一次调用任何 mf 命令必看到，需 `mf note --ack` 回执；10 分钟未回执 → warn |
 
 ### 2.2 各层内容
 - **L0（所有任务一屏）**：健康点、阶段（含轮次）、最佳·复核、最佳·自测、目标与进度条、尝试/预算、活跃 lane、最后活动（超过心跳阈值变黄/红）、需要你处理的条数、首要预警。父子任务缩进显示（整模型 → 热点 kernel）。
@@ -49,7 +49,7 @@ myflow 的取舍：**把 GEAK 的“可信执行”机制压缩成一个 stdlib 
 ## 3. 问题 5：防谎报（威胁 → 机制）
 | 威胁 | 机制 | 位置 |
 |---|---|---|
-| 报告里写一个没测过的数 | 看板/报告只显示 `mf` 产生的数；报告里标注“mf audit 可复核” | render / report |
+| 报告里写一个没测过的数 | 看板/报告只显示 `mf` 产生的数；报告附审计（`mf report` 从原始日志重算） | render / report |
 | 改测试、bench、容差 | `scope.protect` 的 blob 哈希在 freeze 时冻结；改动、删除、新增同名文件 → `oracle_modified` | try / verify |
 | 改范围外文件 | `scope.allow`；只提交范围内文件 | try 快照 |
 | 在错的代码树上测 | 每次尝试自动快照提交，记录 commit；复核按 commit 建干净 worktree | try / verify |
@@ -59,14 +59,14 @@ myflow 的取舍：**把 GEAK 的“可信执行”机制压缩成一个 stdlib 
 | 基线被换掉 | 加速比分母永远是冻结基线（GEAK 的反作弊不变量） | freeze |
 | 中途换测量工具/命令 | 度量契约哈希；改了即 crit，必须重新冻结 | guard |
 | 别人在用这张卡 | 空闲门禁（前后各一次；遥测未知不算空闲）；可加 `commands.gate`（如 PTL/时钟） | runner |
-| 事后改记录 | 事件哈希链 + 末行哈希；`mf audit` 从原始日志重新解析、重算所有数 | core / audit |
+| 事后改记录 | 事件哈希链 + 末行哈希；`mf report` 的审计从原始日志重新解析、重算所有数 | core / audit |
 
 威胁模型：防的是“粗心、偷懒、自我欺骗式”的错误数字（这是实际发生过的）；不防一个刻意伪造全套日志的对手。
 
 ## 4. 问题 6：防卡死（由内到外）
 1. 单条命令：`timeout_s`，超时杀**整个进程组**；`mf` 自己被杀时也会带走子进程（不会留下占卡的孤儿进程）。
 2. 单条 lane：连续失败 `max_fail_streak` → 提醒回到最佳版本；连续 `max_no_improve` 次完整尝试无 ≥`min_improve` 提升 → 该 lane 的 `mf try` 被拒绝。
-3. 整个任务：尝试次数、时长预算用尽 → 拒绝；所有活跃 lane 都停滞 → crit，交给你决定（停 / 换方向 / `mf budget` 延长）。
+3. 整个任务：尝试次数、时长预算用尽 → 拒绝；所有活跃 lane 都停滞 → crit，交给你决定（停 / 换方向 / `mf set budget.*` 延长）。
 4. 活性：`heartbeat_min` 内无任何事件 → warn，3 倍 → crit（agent 可能已卡死或退出）；运行记录长期无结束 → warn。
 5. 可达性：plan 阶段的上限估计低于目标 → 立刻问你，而不是跑完预算才发现。
 
@@ -85,7 +85,7 @@ myflow 的取舍：**把 GEAK 的“可信执行”机制压缩成一个 stdlib 
 | survey | 你的阶段 A（A2：在 aiter 里找可借鉴思路）；GEAK researcher | 每个 repo 一个只读 explore 子 agent；先查经验卡 |
 | plan | GEAK tech_lead（正交方向、预算）；e2e 的 Amdahl 排序 | `ceiling` + 假设台账 + 互不冲突的 lane |
 | implement | GEAK specialist engineers；你的 B1–B4 | lane brief + `mf try` |
-| verify | GEAK verify_engineer；你的 J/J2 | `mf verify`（脚本，不是另一个 agent，避免“复核者也会说错”） |
+| verify | GEAK verify_engineer；你的 J/J2 | `mf ms prep` 里的复核（脚本，不是另一个 agent，避免“复核者也会说错”） |
 | integrate | GEAK integrator | `lane new int --merge` + 复核 |
 | report / learn | GEAK update_experience、learned cards + 生成索引 | `mf report` + 经验卡（相对数字、症状→原因→解决） |
 
@@ -93,7 +93,7 @@ myflow 的取舍：**把 GEAK 的“可信执行”机制压缩成一个 stdlib 
 
 ## 7. 问题 3、8：扩展与轻量
 - **skill**：4 个，各一件事、正文 20–40 行；具体技术知识放经验卡，不塞进 skill。
-- **经验卡**：一卡一结论，frontmatter 可检索，`INDEX.md` 由 `mf kb index` 生成；lint 限制长度、查重复、提醒绝对数字。
+- **经验卡**：一卡一结论，frontmatter 可检索，`INDEX.md` 由 `mf kb check` 生成；lint 限制长度、查重复、提醒绝对数字。
 - **工具**：重复第二次的操作写成脚本放 `<task>/tools/`，第一行 docstring 即索引；通用的提升到 `/opt/myflow/tools/`。
 - **整模型优化**：父任务度量端到端指标，热点 kernel 作为 `--parent` 子任务，L0 树状显示。
 - **新的守卫**：在 `myflow/guard.py` 的 `alerts()` 里加一条规则即可，所有视图和 agent 提醒自动出现。

@@ -3,7 +3,7 @@ name: myflow-bench
 description: >-
   编写或审查 myflow 冻结的正确性测试和 bench（MF_METRIC 输出、计时协议、防作弊检查、机器门禁）。
   Use when setting up commands.correctness / commands.bench for a myflow task, when benchmark numbers look
-  suspicious (too good, unstable, not reproduced by mf verify), or when asked how to benchmark a GPU kernel
+  suspicious (too good, unstable, not reproduced by the verify in mf ms prep), or when asked how to benchmark a GPU kernel
   reliably on AMD (HIP, FlyDSL, Triton, torch). Not for root-causing performance with profilers.
 ---
 
@@ -19,7 +19,7 @@ description: >-
 - 计一次完整调用（含 prologue / epilogue / 尾部），不是稳态片段；JIT、准备、校验不计入。
 - warmup ≥2 次（JIT / autotune 在这里发生）；采样 ≥20 次取中位数；用 GPU event 计时并 synchronize。
 - 轮换 ≥4 组输入；需要冷缓存时每次调用前写一个大于 L2+MALL 的 flush buffer。
-- 输入用 `MF_SEED` 播种（`mf verify` 会换种子）；case 集合与 `SPEC.md` 一致。
+- 输入用 `MF_SEED` 播种（复核会换种子）；case 集合与 `SPEC.md` 一致。
 - 打印全部 case，不在 bench 里挑结果（不丢长尾、不按频率筛样本）。
 
 ## 正确性

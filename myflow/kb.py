@@ -70,7 +70,7 @@ def index() -> Path:
         rows.append((meta.get("kind", "?"), meta.get("name", p.stem), meta.get("summary", ""), meta.get("applies", ""),
                      meta.get("confidence", "")))
     rows.sort()
-    lines = ["# 经验卡索引（生成文件：`mf kb index`，不要手改）", "",
+    lines = ["# 经验卡索引（生成文件：`mf kb check`，不要手改）", "",
              "先读这张表，按语义挑相关卡片再打开；卡片是先验，最终以本机测量为准。", "",
              "| kind | card | summary | applies | conf |", "|---|---|---|---|---|"]
     for kind, name, summ, applies, conf in rows:

@@ -13,7 +13,7 @@ import time
 SPEED = 1.0
 HANG = 0
 # An untracked local artifact (git-ignored) makes a lane's own measurement look better than the
-# committed code really is; `mf verify` runs in a clean worktree and exposes it.
+# committed code really is; the verify in `mf ms prep` runs in a clean worktree and exposes it.
 if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".boost")):
     SPEED *= 1.3
 

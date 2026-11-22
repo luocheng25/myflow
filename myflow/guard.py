@@ -96,7 +96,7 @@ def alerts(st, now=None) -> list:
     if (st.dir / "events.jsonl").exists():
         broken = audit_chain(st.dir)
         if broken:
-            add("crit", "tamper", f"事件日志哈希链断裂（{len(broken)} 处）：日志被手工修改过，数字不可信。运行 mf audit 查看")
+            add("crit", "tamper", f"事件日志哈希链断裂（{len(broken)} 处）：日志被手工修改过，数字不可信。mf report 会列出审计结果")
     pi = PHASES.index(st.phase) if st.phase in PHASES else 0
 
     # -- alignment and gates (drift starts here)
@@ -131,7 +131,7 @@ def alerts(st, now=None) -> list:
         elif not pg.get("asked_t"):  # opened by mf (push / protected tests): nobody has actually asked the user yet
             add("crit" if wait > 1800 else "warn", "gate_unasked",
                 f"【{pg['key']}】需要用户确认，但编排者 {_age(wait)} 还没问用户（仅编排者处理）：现在就在对话里问用户，"
-                f"不要攒到后面；问完运行 mf asked {st.id} {pg['key']}")
+                f"不要攒到后面；问完运行 mf brief {st.id} --gate {pg['key']} \"<问了什么>\"")
     for s in st.unacked():
         age = now - s["t"]
         lvl = "warn" if age > 600 else "info"
@@ -234,7 +234,7 @@ def alerts(st, now=None) -> list:
                                       f"{_age(idle)} 前；如果你已经回复过，说明 agent 没记录你的答复或已经停止")
         elif idle > hb and ev and now - ev["t"] < hb:
             add("warn", "no_record", f"agent {_age(idle)} 没调用 mf，但 {seen}还有改动{files}：在干活，只是没记录"
-                                     f"（mf ping 说明在做什么，做成一步就 mf note --kind finding）")
+                                     f"（mf note 说明在做什么，做成一步就 mf note --kind finding）")
         elif idle > hb:
             also = f"；最近的文件改动在 {seen}" if ev else "；也没有文件改动"
             add("crit" if idle > 3 * hb else "warn", "stale",
@@ -430,5 +430,5 @@ def refusal(st, kind: str = "try", lane=None):
         ln = st.lanes.get(lane) if lane else None
         if ln and ln.get("stalled"):
             return (f"lane {lane} 连续 {ln['no_improve']} 次无提升（stall）：换方向（新 lane）或停掉本线；"
-                    "继续本线需用户同意后 mf budget --no-improve +N")
+                    "继续本线需用户同意后 mf set <任务> budget.max_no_improve=<N>")
     return None

@@ -33,7 +33,7 @@ class MilestoneBase(Base):
         p = wt / entry
         p.write_text(p.read_text() + f"\n{doc_line}\n")
         (d / "card.md").write_text(f"### {mid}\n**What**: raise SPEED\n**Why**: toy\n")
-        self.ok("ms", "role", tid, mid, "--session", f"review-{mid}", "--card", d / "card.md", "-m", "doc updated")
+        self.ok("ms", "review", tid, mid, "--session", f"review-{mid}", "--card", d / "card.md", "-m", "doc updated")
 
     def milestone1(self):
         """M1 = lane L1 at SPEED 1.3, closed and pushed. Returns (tdir, integration worktree, M1 commit)."""
@@ -41,7 +41,7 @@ class MilestoneBase(Base):
         self.configure()
         self.edit(tdir, "L1", r"^SPEED = .*", "SPEED = 1.3")
         self.ok("try", "t1", "--lane", "L1", "--idea", "1.3")
-        self.ok("verify", "t1", "--lane", "L1")
+        self.verify("L1")
         self.ok("ms", "plan", "t1", "M1", "--title", "speed 1.3", "--type", "perf", "--expect", "1.3", "--basis", "toy",
                 "--goal", "G1")
         self.ok("ms", "plan", "t1", "M2", "--title", "speed 1.6", "--type", "perf", "--expect", "1.2", "--goal", "G1")
@@ -64,9 +64,10 @@ class MilestoneTest(MilestoneBase):
         self.configure()
         self.edit(tdir, "L1", r"^SPEED = .*", "SPEED = 1.3")
         self.ok("try", "t1", "--lane", "L1", "--idea", "1.3")
-        self.ok("verify", "t1", "--lane", "L1")
+        self.verify("L1")
         self.ok("ms", "plan", "t1", "M1", "--title", "speed 1.3", "--type", "perf", "--expect", "1.3", "--basis", "toy",
-                "--goal", "G1")
+                "--goal", "G1", "--ceiling", "2")
+        self.assertEqual(self.st().ceiling["value"], 2.0)
         self.ok("ms", "plan", "t1", "M2", "--title", "speed 1.6", "--type", "perf", "--expect", "1.2", "--goal", "G1")
         out = self.ok("ms", "prep", "t1", "M1", "--lane", "L1")
         self.assertIn("myflow-review", out)
@@ -74,7 +75,7 @@ class MilestoneTest(MilestoneBase):
         entry = (wt / "docs" / "ENTRY.md").read_text()
         self.assertIn("由 mf 生成", entry)
         self.assertIn("| M1 | ✅ 本提交", entry)
-        rc, out = mf("ms", "role", "t1", "M1", "--session", "w0")
+        rc, out = mf("ms", "review", "t1", "M1", "--session", "w0")
         self.assertEqual(rc, 3, out)  # the card skeleton still has placeholders
         self.assertIn("占位符", out)
         self.roles("t1", "M1", tdir, wt)
@@ -126,7 +127,7 @@ class MilestoneTest(MilestoneBase):
         self.ok("try", "t1", "--lane", "L2", "--idea", "no-op: inherits M1's gain")
         n_noop = self.st().attempts[-1]["n"]
         self.assertEqual(self.st().attempt(n_noop)["status"], "pass")
-        self.ok("verify", "t1", "--lane", "L2", "--attempt", n_noop)
+        self.verify("L2", n_noop)
         self.assertEqual(self.st().verifies[-1]["verdict"], "improved")  # vs the frozen base it looks like a gain ...
         rc, out = mf("ms", "prep", "t1", "M2", "--lane", "L2", "--attempt", n_noop)
         self.assertEqual(rc, 3, out)  # ... but vs M1 it is nothing
@@ -134,7 +135,7 @@ class MilestoneTest(MilestoneBase):
         self.edit(tdir, "L2", r"^SPEED = .*", "SPEED = 1.6")
         self.ok("try", "t1", "--lane", "L2", "--idea", "1.6")
         n = self.st().attempts[-1]["n"]
-        self.ok("verify", "t1", "--lane", "L2", "--attempt", n)
+        self.verify("L2", n)
         self.ok("set", "t1", 'tests.paths=["**"]', 'doc.paths=["**"]')  # broad globs must stay harmless
         self.ok("ms", "prep", "t1", "M2", "--lane", "L2", "--attempt", n)
         inc = self.st().milestones["M2"]["prep"]["inc"]
@@ -147,27 +148,27 @@ class MilestoneTest(MilestoneBase):
         k = wt / "kernel.py"
         orig = k.read_text()
         k.write_text(orig + "SPEED = 0.5\n")
-        rc, out = mf("ms", "role", "t1", "M2", "--session", "r2", "--card", d / "card.md")
+        rc, out = mf("ms", "review", "t1", "M2", "--session", "r2", "--card", d / "card.md")
         self.assertEqual(rc, 3, out)
         self.assertIn("只能改", out)
         k.write_text(orig)
         (wt / "tuning.txt").write_text("0.3\n")  # .txt may be runtime data, never "documentation"
-        rc, out = mf("ms", "role", "t1", "M2", "--session", "r2", "--card", d / "card.md")
+        rc, out = mf("ms", "review", "t1", "M2", "--session", "r2", "--card", d / "card.md")
         self.assertEqual(rc, 3, out)
         (wt / "tuning.txt").unlink()
         tk = wt / "test_kernel.py"
         base_tk = tk.read_text()
         tk.write_text(base_tk + "assert kernel.run([1]) == [2]\n")
-        rc, out = mf("ms", "role", "t1", "M2", "--session", "r2", "--card", d / "card.md")
+        rc, out = mf("ms", "review", "t1", "M2", "--session", "r2", "--card", d / "card.md")
         self.assertEqual(rc, 3, out)  # user rule 11-22: no approval needed, but the reason has to be written down
         self.assertIn("--tests-why", out)
-        self.ok("ms", "role", "t1", "M2", "--session", "r2", "--card", d / "card.md", "--tests-why", "加 run([1])")
+        self.ok("ms", "review", "t1", "M2", "--session", "r2", "--card", d / "card.md", "--tests-why", "加 run([1])")
         tk.write_text(base_tk + "assert kernel.run([0]) == [0]\n")  # changed again: a new reason for the new content
-        rc, out = mf("ms", "role", "t1", "M2", "--session", "r2", "--card", d / "card.md")
+        rc, out = mf("ms", "review", "t1", "M2", "--session", "r2", "--card", d / "card.md")
         self.assertEqual(rc, 3, out)
         e = wt / "docs" / "ENTRY.md"
         e.write_text(e.read_text() + "第二轮\n")
-        out = self.ok("ms", "role", "t1", "M2", "--session", "r2", "--card", d / "card.md",
+        out = self.ok("ms", "review", "t1", "M2", "--session", "r2", "--card", d / "card.md",
                       "--tests-why", "只加断言 run([0])，没有放宽容差")
         self.assertIn("已说明", out)
         self.assertEqual([g for g in self.st().pending_gates() if g["key"].startswith(("oracle@", "tests@"))], [])
@@ -192,10 +193,9 @@ class MilestoneTest(MilestoneBase):
         self.ok("lane", "new", "t1", "L3", "--from", "L2", "--direction", "from L2")
         self.ok("try", "t1", "--lane", "L3", "--idea", "x")
         self.assertEqual(self.st().attempts[-1]["status"], "pass")
-        self.assertIn("M2", self.ok("ms", "show", "t1"))
-        self.ok("report", "t1")
+        self.assertIn("M2", self.ok("status", "t1"))
+        self.assertIn("审计通过", self.ok("report", "t1"))
         self.assertIn("## 里程碑", (tdir / "REPORT.md").read_text())
-        self.ok("audit", "t1")
 
     def test_integration_lane_needs_no_try_and_prep_measures_both_in_one_run(self):
         """User request 11-22: no `mf try` on an integration lane; one three-arm run (frozen base / previous milestone /
@@ -224,7 +224,7 @@ class MilestoneTest(MilestoneBase):
         self.ok("lane", "new", "t1", "L2", "--direction", "no-op")
         self.ok("try", "t1", "--lane", "L2", "--idea", "no-op")
         n = self.st().attempts[-1]["n"]
-        self.ok("verify", "t1", "--lane", "L2", "--attempt", n)
+        self.verify("L2", n)
         self.ok("freeze", "t1", "--base", "M1")  # new epoch: the 1.3x above was measured against the old base
         rc, out = mf("ms", "prep", "t1", "M2", "--lane", "L2", "--attempt", n)
         self.assertEqual(rc, 3, out)  # prep re-measured against the new base itself (user request 11-22) ...
@@ -244,7 +244,7 @@ class MilestoneTest(MilestoneBase):
         git("config", "gpg.program", "/bin/false", cwd=self.repo)
         self.edit(tdir, "L1", r"^SPEED = .*", "SPEED = 1.3")
         self.ok("try", "t1", "--lane", "L1", "--idea", "1.3")
-        self.ok("verify", "t1", "--lane", "L1")
+        self.verify("L1")
         self.ok("ms", "plan", "t1", "M1", "--title", "speed", "--type", "perf", "--expect", "1.3")
         self.ok("ms", "prep", "t1", "M1", "--lane", "L1")
         self.roles("t1", "M1", tdir, tdir / "wt" / "_ms")
@@ -265,7 +265,7 @@ class MilestoneTest(MilestoneBase):
         self.configure()
         self.edit(tdir, "L1", r"^SPEED = .*", "SPEED = 1.3")
         self.ok("try", "t1", "--lane", "L1", "--idea", "1.3")
-        self.ok("verify", "t1", "--lane", "L1")
+        self.verify("L1")
         self.ok("ms", "plan", "t1", "M1", "--title", "speed 1.3", "--type", "perf", "--expect", "1.3", "--goal", "G1")
         self.ok("ms", "plan", "t1", "M2", "--title", "old plan", "--type", "perf", "--expect", "1.2", "--goal", "G1")
         self.ok("ms", "prep", "t1", "M1", "--lane", "L1")
@@ -274,11 +274,12 @@ class MilestoneTest(MilestoneBase):
         p = wt / "docs" / "ENTRY.md"
         p.write_text(p.read_text() + "\n设计说明\n")
         (d / "card.md").write_text("### M1\n**What**: raise SPEED\n**Next**: M2 old plan, then freeze\n**Notes**: kept\n")
-        self.ok("ms", "role", "t1", "M1", "--session", "w", "--card", d / "card.md")
+        self.ok("ms", "review", "t1", "M1", "--session", "w", "--card", d / "card.md")
         # the plan changes after the review: what gets pushed must say so
         self.ok("ms", "plan", "t1", "M2", "--title", "split M2a", "--why", "split in two")
         self.ok("ms", "plan", "t1", "M3", "--title", "then M3", "--type", "perf", "--expect", "1.1", "--tentative")
-        self.ok("doc", "render", "t1")  # only mf's blocks changed: the review need not record again
+        # e.g. a re-render after the plan changed: only mf's blocks differ, the review need not record again
+        ms._fill_entry(self.st(), p, current=self.st().open_ms)
         self.ok("ms", "close", "t1", "M1", "--next", "M2")
         c = self.st().milestones["M1"]["close"]["commit"]
         msg = git("log", "-1", "--format=%B", c, cwd=self.repo)
@@ -290,7 +291,7 @@ class MilestoneTest(MilestoneBase):
         self.assertIn("下一步（本提交的承诺）：M2 split M2a", doc)
         self.assertIn("设计说明", doc)
         self.assertNotIn("old plan", doc)
-        self.assertIn("split M2a", self.ok("ms", "show", "t1", "M1"))  # shows the committed text
+        self.assertIn("split M2a", self.ok("status", "t1", "M1"))  # shows the committed text
         tv = self.st().milestones["M1"]["roles"]["review"]["tree"]
         self.assertTrue(ms._blocks_only(self.st(), tv, git("rev-parse", f"{c}^{{tree}}", cwd=self.repo)))
         p.write_text(p.read_text() + "more prose\n")  # prose after the review is a real change
@@ -307,7 +308,7 @@ class MilestoneTest(MilestoneBase):
         self.configure()
         self.edit(tdir, "L1", r"^SPEED = .*", "SPEED = 1.3")
         self.ok("try", "t1", "--lane", "L1", "--idea", "1.3")
-        self.ok("verify", "t1", "--lane", "L1")
+        self.verify("L1")
         self.ok("ms", "plan", "t1", "M1", "--title", "提速到 1.3", "--type", "perf", "--expect", "1.3", "--goal", "G1")
         self.ok("ms", "plan", "t1", "M2", "--title", "预取", "--type", "perf", "--expect", "1.2", "--basis", "带宽")
         self.ok("ms", "prep", "t1", "M1", "--lane", "L1")
@@ -316,12 +317,12 @@ class MilestoneTest(MilestoneBase):
         p = wt / "docs" / "ENTRY.md"
         p.write_text(p.read_text() + "\n设计说明：把 SPEED 提到 1.3，toy kernel 的三个 case 都更快。\n")
         (d / "card.md").write_text("### M1\n**What**: raise SPEED to 1.3\n**Why**: toy\n")
-        rc, out = mf("ms", "role", "t1", "M1", "--session", "w", "--card", d / "card.md")
+        rc, out = mf("ms", "review", "t1", "M1", "--session", "w", "--card", d / "card.md")
         self.assertEqual(rc, 3, out)
         self.assertIn("不是中文", out)
         (d / "card.md").write_text("### M1 · 提速到 1.3\n**做了什么**：把 `SPEED` 从 1.0 提到 1.3。\n"
                                    "**原理**：toy kernel 的耗时与 SPEED 成反比。\n")
-        self.ok("ms", "role", "t1", "M1", "--session", "w", "--card", d / "card.md")
+        self.ok("ms", "review", "t1", "M1", "--session", "w", "--card", d / "card.md")
         self.ok("set", "t1", "git.lang=en")
         self.assertIn("lang_rule", {a["code"] for a in guard.alerts(self.st())})
         rc, out = mf("ms", "close", "t1", "M1", "--next", "M2")
@@ -378,13 +379,13 @@ class MilestoneTest(MilestoneBase):
         new = self.st("b1").milestones["M0"]["close"]["commit"]
         self.assertEqual(git("--git-dir", str(self.remote), "rev-parse", "feat/b1"), old)  # nothing overwritten yet
         rkey = next(g["key"] for g in self.st("b1").pending_gates() if g["key"].startswith("push-replace:"))
-        self.ok("asked", "b1", rkey)
+        self.ok("brief", "b1", "--gate", rkey, "覆盖远端上已撤销的 M0 吗？")
         self.ok("decide", "b1", "--gate", rkey, "覆盖")
         self.assertIn("覆盖了已撤销的内容", self.ok("ms", "push", "b1"))
         self.assertEqual(git("--git-dir", str(self.remote), "rev-parse", "feat/b1"), new)
         self.assertEqual(git("--git-dir", str(self.remote), "rev-parse", "b1-M0^{commit}"), new)
         self.assertEqual(self.st("b1").pending_gates(), [])
-        self.assertIn("已撤销 M0", self.ok("ms", "show", "b1"))
+        self.assertIn("已撤销 M0", self.ok("status", "b1"))
 
     def test_lean_closing_is_one_review_recorded_once(self):
         """User rule 11-21 (lean process, the default): closing = one independent review that fixes docs and adds
@@ -484,7 +485,7 @@ class MilestoneTest(MilestoneBase):
         entry = wt / "docs" / "ENTRY.md"
         entry.write_text(entry.read_text() + "\nM0 一节\n")
         (d / "card.md").write_text("### M0\n**What**: newop\n")
-        self.ok("ms", "role", "b1", "M0", "--session", "rv0", "--card", d / "card.md")
+        self.ok("ms", "review", "b1", "M0", "--session", "rv0", "--card", d / "card.md")
         self.assertIn("不重置", self.ok("ms", "close", "b1", "M0", "--next", "M1"))
         self.assertTrue((bwt / "newop2.py").is_file())  # the next milestone's work is untouched
         self.assertIn("流水线", self.ok("ms", "prep", "b1", "M1", "--bootstrap"))
@@ -568,7 +569,7 @@ class RelayAndProgressTest(MilestoneBase):
         self.configure()
         self.edit(tdir, "L1", r"^SPEED = .*", "SPEED = 1.3")
         self.ok("try", "t1", "--lane", "L1", "--idea", "1.3")
-        self.ok("verify", "t1", "--lane", "L1")
+        self.verify("L1")
         self.ok("ms", "plan", "t1", "M1", "--title", "speed 1.3", "--type", "perf", "--expect", "1.3", "--goal", "G1")
         self.ok("ms", "prep", "t1", "M1", "--lane", "L1")
         self.roles("t1", "M1", tdir, tdir / "wt" / "_ms")
@@ -579,11 +580,11 @@ class RelayAndProgressTest(MilestoneBase):
         now = time.time()
         self.assertEqual({a["code"]: a["level"] for a in guard.alerts(st, now)}.get("gate_unasked"), "warn")
         self.assertEqual({a["code"]: a["level"] for a in guard.alerts(st, now + 31 * 60)}.get("gate_unasked"), "crit")
-        self.assertIn("还没问用户", self.ok("ping", "t1", "waiting for roles"))
-        self.assertNotIn("还没问用户", self.ok("ping", "t1", "--lane", "L1", "x"))  # a lane agent cannot ask the user
-        rc, out = mf("asked", "t1", "push:nope")
+        self.assertIn("还没问用户", self.ok("note", "t1", "waiting for the review"))
+        self.assertNotIn("还没问用户", self.ok("note", "t1", "--lane", "L1", "x"))  # a lane agent cannot ask the user
+        rc, out = mf("brief", "t1", "--gate", "push:nope", "推送？")
         self.assertEqual(rc, 2, out)
-        self.ok("asked", "t1", key, "--via", "chat")
+        self.ok("brief", "t1", "--gate", key, "M1 推送到 feat/t1？")
         st = self.st()
         self.assertEqual(st.gates[key]["asked_via"], "chat")
         al = guard.alerts(st, now + 3 * 3600)
@@ -593,7 +594,7 @@ class RelayAndProgressTest(MilestoneBase):
         self.assertIn("await_user", codes)  # silent because it waits for the user, not because it is stuck
         self.assertNotIn("stale", codes)
         self.ok("decide", "t1", "--gate", key, "推吧")
-        rc, out = mf("asked", "t1", key)
+        rc, out = mf("brief", "t1", "--gate", key, "推送？")
         self.assertEqual(rc, 2, out)  # no longer pending
 
     def test_unreported_progress_spin_and_silent_work_are_told_apart(self):
@@ -611,7 +612,7 @@ class RelayAndProgressTest(MilestoneBase):
         self.assertIn("最后向你汇报：", render.status_md(self.st()))
         # alive (still calling mf) but no recorded progress and no file changes for longer than spin_min
         time.sleep(1.5)
-        self.ok("ping", "t1", "--lane", "L1", "still thinking")
+        self.ok("note", "t1", "--lane", "L1", "still thinking")
         self.assertEqual({a["code"]: a["level"] for a in guard.alerts(self.st())}.get("spin"), "warn")
         # files changing in a worktree: working, the step is just not recorded yet
         p = tdir / "wt" / "L1" / "kernel.py"
@@ -666,7 +667,7 @@ class RelayAndProgressTest(MilestoneBase):
         self.assertIn("没有需要编排者处理的事", out)
         self.ok("steer", "t1", "please also check T=48")  # a user message for the orchestrator
         self.assertIn("用户留言 #1", self.ok("await", "t1", "--max-min", "5", "--poll-s", "0.05"))
-        self.ok("ack", "t1", "1", "will do")
+        self.ok("note", "t1", "--ack", "1", "will do")
         append_event(tdir, "brief", "confirm the push target", by="mf", phase="push:x", round=1, ask=True)
         self.assertIn("还没问用户", self.ok("await", "t1", "--max-min", "5", "--poll-s", "0.05"))
         n = len(self.st().events)  # await itself records nothing (it is not agent activity)
@@ -679,7 +680,7 @@ class RelayAndProgressTest(MilestoneBase):
         rc, out = mf("decide", "t1", "--default", "按推荐项")
         self.assertEqual(rc, 3, out)  # no delegation in force: the user must be asked
         words = "接下来的10个小时中如有问题要确认按照默认值进行"
-        self.ok("delegate", "t1", "--hours", "10", "--quote", words)
+        self.ok("decide", "t1", "--delegate", "10", words)
         ms._open_gate(self.st(), "push:abcd1234", "推送到 X？")
         al = {a["code"]: a for a in guard.alerts(self.st())}
         self.assertIn("--default", al["gate_unasked"]["msg"])  # await still wakes the orchestrator to decide it
@@ -690,7 +691,7 @@ class RelayAndProgressTest(MilestoneBase):
         self.assertEqual([(d["text"], d["quote"]) for d in st.default_decisions()], [("推送到已批准的目标（推荐项）", words)])
         self.assertIn("按默认值代你决定", (tdir / "STATUS.md").read_text())
         self.assertIn("决策（按默认值·用户授权）", (tdir / "STATUS.md").read_text())
-        self.ok("delegate", "t1", "--off")
+        self.ok("decide", "t1", "--delegate", "0", "回来了")
         rc, out = mf("decide", "t1", "--default", "x")
         self.assertEqual(rc, 3, out)
         self.assertIn("推送到已批准的目标", render.status_md(self.st()))  # still listed for the user after it ended
@@ -711,7 +712,7 @@ class RelayAndProgressTest(MilestoneBase):
         self.configure()
         self.edit(tdir, "L1", r"^SPEED = .*", "SPEED = 1.3")
         self.ok("try", "t1", "--lane", "L1", "--idea", "1.3")
-        self.ok("verify", "t1", "--lane", "L1")
+        self.verify("L1")
         self.ok("ms", "plan", "t1", "M1", "--title", "speed 1.3", "--type", "perf", "--expect", "1.3", "--goal", "G1")
         self.ok("ms", "prep", "t1", "M1", "--lane", "L1")
         wt = tdir / "wt" / "_ms"
@@ -720,12 +721,12 @@ class RelayAndProgressTest(MilestoneBase):
         d = tdir / "milestones" / "M1"
         (d / "card.md").write_text("### M1\n**What**: raise SPEED\n")
         tk.write_text(base_tk + "assert kernel.run([1]) == [2]\n")
-        self.ok("ms", "role", "t1", "M1", "--session", "rv", "--card", d / "card.md", "--tests-why", "加 [1]")
+        self.ok("ms", "review", "t1", "M1", "--session", "rv", "--card", d / "card.md", "--tests-why", "加 [1]")
         first = self.st().milestones["M1"]["roles"]["review"]["tests_key"]
         tk.write_text(base_tk + "assert kernel.run([1]) == [2]\nassert kernel.run([0]) == [0]\n")
-        rc, out = mf("ms", "role", "t1", "M1", "--session", "rv", "--card", d / "card.md")
+        rc, out = mf("ms", "review", "t1", "M1", "--session", "rv", "--card", d / "card.md")
         self.assertEqual(rc, 3, out)  # the reason given for the old content does not carry over
-        self.ok("ms", "role", "t1", "M1", "--session", "rv", "--card", d / "card.md", "--tests-why", "加 [0]")
+        self.ok("ms", "review", "t1", "M1", "--session", "rv", "--card", d / "card.md", "--tests-why", "加 [0]")
         self.assertNotEqual(self.st().milestones["M1"]["roles"]["review"]["tests_key"], first)
         self.assertEqual(self.st().pending_gates(), [])  # no question for the user
         self.ok("ms", "close", "t1", "M1", "--next", "await-user")
@@ -735,7 +736,7 @@ class RelayAndProgressTest(MilestoneBase):
         st = self.st()
         self.assertEqual(st.gates[old]["state"], "superseded")  # the old question stops asking
         new = next(g["key"] for g in st.pending_gates() if g["key"].startswith("push:"))
-        self.ok("asked", "t1", new)
+        self.ok("brief", "t1", "--gate", new, "改推到 feat/other？")
         self.ok("decide", "t1", "--gate", new, "推到 feat/other")
         self.assertIn("已推送 M1", self.ok("ms", "push", "t1"))
         self.assertEqual(self.st().pending_gates(), [])
@@ -815,9 +816,9 @@ class SettingsAndRenderingTest(Base):
 class CliAndDirectionTest(Base):
     def test_parser_and_run_still_work(self):
         p = cli.build_parser()
-        self.assertEqual(p.parse_args(["doc", "render", "t1"]).task, "t1")
+        self.assertEqual(p.parse_args(["status", "t1", "M3"]).item, "M3")
         self.assertEqual(p.parse_args(["run", "t1", "echo", "x"]).cmd, ["echo", "x"])
-        self.assertEqual(p.parse_args(["ms", "role", "t1", "M1", "--session", "s", "-m", "ok"]).summary, "ok")
+        self.assertEqual(p.parse_args(["ms", "review", "t1", "M1", "--session", "s", "-m", "ok"]).summary, "ok")
         self.ready()
         out = self.ok("run", "t1", "--lane", "L1", "--gpu", "none", "--", "echo", "hi")
         self.assertIn("hi", out)

@@ -14,16 +14,16 @@ description: >-
 
 你负责对齐、规划、派发、复核、汇报；改代码交给 lane 子 agent（skill `myflow-lane`）。
 `mf` 不在 PATH 时用 `/opt/myflow/bin/mf`。任务目录 `~/.myflow/tasks/<id>/`（SPEC.md、survey.md、plan.md 都写在这里）。
-每条 `mf` 输出末尾的「mf 提醒」必须先处理再继续。超过 20 分钟没有其他 mf 调用时（读代码、调研），`mf ping <id> "在做什么"`。
+每条 `mf` 输出末尾的「mf 提醒」必须先处理再继续。超过 20 分钟没有其他 mf 调用时（读代码、调研），`mf note <id> "在做什么"`。
 
 ## 铁律
-1. 性能数字只来自 `mf try`（自测、未配对）和 `mf verify`（官方：干净 worktree + 同卡 ABBA）。向用户汇报时引用 `mf show` 的表。
+1. 性能数字只来自 `mf try`（自测、未配对）和 `mf ms prep` 的复核（官方：干净 worktree + 同卡 ABBA）。向用户汇报时引用 `mf status` 的表。
 2. gate=ask 的阶段：`mf brief <id> --ask "…"`（≤600 字）后**停下来问用户**；得到回复再 `mf decide <id> --gate <key> "…" --quote "<用户原话>"`。绝不替用户批准。
 3. 冻结后 lane 不改 oracle（`scope.protect` 下的用例与 bench），也不改度量契约（bench / 正确性命令、`scope.protect` 等）；必须改契约时先问用户，再 `mf set` + `mf freeze`。收尾时复核可按第 13 条补 / 改用例（bench 除外）。
 4. 遇到 REFUSED（exit 3）或 crit 预警：停止派发，向用户汇报现状并给出选项。
-5. 📨 用户留言优先：照做，然后 `mf ack <id> <n> "怎么处理的"`。
+5. 📨 用户留言优先：照做，然后 `mf note <id> --ack <n> "怎么处理的"`。
 6. mf 自己挂起的 gate（推送目标变了的 `push:…`、覆盖远端的 `push-replace:…`）只是记录，**mf 不会问用户**。在任何 mf 输出里（包括子 agent 带回的）看到「需要用户确认【key】」：
-   当回合就在对话里问用户（附上要确认的内容，不要攒着和别的问题一起问），然后 `mf asked <id> <key>`；用户回复后 `mf decide`。
+   当回合就在对话里问用户（附上要确认的内容，不要攒着和别的问题一起问），然后 `mf brief <id> --gate <key> "问了什么"`；用户回复后 `mf decide`。
    未转达的 gate 超过 30 分钟会升为 crit。
 7. 汇报 = 在对话里告诉用户 **并** `mf brief <id> "做完了什么 / 下一步 / 风险"`（不带 `--lane`）。mf 只看得到 brief：
    有进展超过 `budget.report_min`（默认 60 分钟）没汇报会提醒 `no_report`；看板显示“最后向你汇报 N 前”。
@@ -47,7 +47,7 @@ description: >-
     - 功能版继续在 bootstrap worktree 做；
     - 性能 lane 新建时默认从收尾中的候选开始。
     下一个 `ms prep` 时，mf 自动合并上一个收尾提交（只多了文档 / 用例），并校验代码不变；收尾不会重置正在做的工作。
-12. 用户授权按默认值决定（例如“接下来 10 小时有问题按默认值进行”）：先 `mf delegate <id> --hours 10 --quote "<原话>"`。授权期内不问用户：
+12. 用户授权按默认值决定（例如“接下来 10 小时有问题按默认值进行”）：先 `mf decide <id> --delegate 10 "<原话>"`。授权期内不问用户：
     需要确认的事按默认值（你在表单里会设为 default 的推荐项）决定，`mf decide <id> [--gate <key>] --default "<选了什么、为什么>"`。
     所有代决的事会单独列在看板上；用户回来时，汇报里先列这些代决事项。
 13. 测试原则（用户 11-22）：
@@ -68,14 +68,13 @@ description: >-
 | 1 spec | 读需求和代码；写 `SPEC.md`，重点写第 7 节“我的理解与假设”、第 8 节“待你回答的问题”，并写明性能对照与精度参考的来源、推送目标（URL + 分支）；用 `mf set` 填 commands / parse / scope / metric（bench 写法见 skill `myflow-bench`）以及 `doc.entry`、`doc.paths`、`tests.paths`、`git.url`、`git.branch`（先设好再问：批准需求即同时批准推送目标，之后不再单独问） | `mf new <id> --repo R --goal G --target X [--from /opt/myflow/templates/task.example.json]` → `mf brief --ask`（mf 会附上推送目标）→ 等用户 → `mf decide --gate spec` |
 | 2 freeze | 冻结基线（正确性必须先在基线通过）。**新算子**基线上还没有它：先做 bootstrap M0（见下），再以 M0 冻结 | `mf freeze <id>` |
 | 3 survey（只在新的算子类别 / 没有可用经验时） | 先读经验卡 `/opt/myflow/knowledge/INDEX.md`；再按 `survey.repos` 每个 repo 派一个只读 explore 子 agent 找同类实现 | `survey.md`（≤1 页表：来源·技术·适用性·预计收益·证据）→ `mf note <id> --kind survey --file survey.md` |
-| 4 plan | 估上限（roofline / Amdahl）；按“收益×把握÷成本”排序；**本轮的里程碑计划卡**；选互不冲突（改不同文件）的 lane | `mf ceiling <id> X "依据"`；`mf ms plan <id> M<k> --title … --type perf --expect 1.10 --basis "…" --goal G1 --hours 8`（再计划下一个，作为“下一步”）；`mf lane new <id> L1 --direction "…"`；`mf ms plan … --ask`（与承诺一致时 mf 只通知，否则等用户） |
+| 4 plan | 估上限（roofline / Amdahl）；按“收益×把握÷成本”排序；**本轮的里程碑计划卡**；选互不冲突（改不同文件）的 lane | `mf ms plan <id> M<k> --title … --type perf --expect 1.10 --basis "…" --ceiling X --goal G1 --hours 8`（再计划下一个，作为“下一步”）；`mf lane new <id> L1 --direction "…"`；`mf ms plan … --ask`（与承诺一致时 mf 只通知，否则等用户） |
 | 5 implement | 每条 lane 派一个后台子 agent，prompt 就用 `mf lane new` 打印的那句；等待期间只看 `mf status` 与提醒，不替 lane 改代码 | lane 的 `mf try` 记录 |
-| 6 verify（可选） | 要在几条 lane 之间挑选时，复核各自的最佳尝试；按结果更新假设。只有一条候选时跳过：prep 会自己测 | `mf verify <id> --lane L`；`mf hyp <id> set H1 confirmed\|refuted --evidence "V3 …"` |
-| 7 收尾（integrate） | 一个里程碑 = 一个主题。多条有效 lane 叠加：`lane new int --from M<k-1> --merge L1,L2`，集成 lane 不用 `mf try`。prep 自己补测缺的数字（两个都缺时一次三方交替测量：冻结基线 / 上一里程碑 / 候选），同一份代码和用例的功能用例只跑一次 | `mf ms prep <id> M<k> --lane L` → 派 1 个复核子 agent（不是实现者的会话），同时派下一个里程碑的实现者 → `mf ms close <id> M<k> --next M<k+1>` |
-| 8 report | ≤3 行摘要；生成报告；用 skill `myflow-learn` 沉淀 ≤3 张经验卡 | `mf note <id> --kind summary "…"` → `mf report <id>` → 用户确认后 `mf phase <id> done` |
+| 6 收尾（integrate） | 一个里程碑 = 一个主题。按 `mf try` 自测挑一条 lane；prep 的复核不通过（自测未复现、对上一里程碑无提升）就换一条。多条有效 lane 叠加：`lane new int --from M<k-1> --merge L1,L2`，集成 lane 不用 `mf try`。prep 自己补测缺的数字（两个都缺时一次三方交替测量：冻结基线 / 上一里程碑 / 候选），同一份代码和用例的功能用例只跑一次 | `mf ms prep <id> M<k> --lane L` → 派 1 个复核子 agent（不是实现者的会话），同时派下一个里程碑的实现者 → `mf ms close <id> M<k> --next M<k+1>` |
+| 7 report | ≤3 行摘要；生成报告（附审计：所有数字从原始日志重算）；用 skill `myflow-learn` 沉淀 ≤3 张经验卡 | `mf note <id> --kind summary "…"` → `mf report <id>` → 用户确认后 `mf report <id> --done` |
 
 阶段由动作自动推进：`ms plan` → 计划，`lane new` → 实现，`ms prep` → 收尾，`ms close --next report` → 报告；
-收尾后再计划性能里程碑会开下一轮（R2…）。只有结束时手动 `mf phase <id> done`。汇报照常用 `mf brief`。
+收尾后再计划性能里程碑会开下一轮（R2…）。结束时 `mf report <id> --done`。汇报照常用 `mf brief`。
 
 ## 里程碑（让用户在 GitHub 上看到进展；设计见 /opt/myflow/docs/DESIGN-v2-milestones.md）
 - 粒度：一句话 + ≤20 行伪代码 diff 能讲清；默认 ≤800 行非文档 / 非用例改动（超了先拆，确需时 `--size-why`）。
@@ -99,12 +98,12 @@ description: >-
 ## 防卡死
 - plan 阶段必须给出上限估计；上限 < 目标会自动变成“需要你确认”，先问用户是否调整目标。
 - 单条 lane 连续 `max_no_improve` 次无提升会被拒绝；所有 lane 都停滞 → 向用户给出“停止 / 换方向 / 延长预算”三选一。
-- 改目标、预算、范围一律用 `mf set` / `mf budget --why "…"`：这些改动会显示在看板上。
-- “是否在推进”由证据判定，不看自述。进展 = try / verify / ms.* / lane / hyp / freeze / phase，以及
-  `mf note --kind finding|survey|plan|summary|deadend|lesson`；`mf ping` 只证明活着。没有进展记录时，mf 再看 worktree 的提交 / 未提交改动和任务目录文档：
+- 改目标、预算、范围一律用 `mf set <id> key=value --why "…"`（例如 `budget.max_attempts=80`）：这些改动会显示在看板上。
+- “是否在推进”由证据判定，不看自述。进展 = try / 复核 / ms.* / lane / freeze，以及
+  `mf note --kind finding|survey|plan|summary|deadend|lesson`；不带 `--kind` 的 `mf note` 只证明活着。没有进展记录时，mf 再看 worktree 的提交 / 未提交改动和任务目录文档：
   `stale` 什么都没有（可能卡死）· `spin` 还在调 mf 但 `budget.spin_min` 内没有进展、文件也没动（原地打转）·
   `no_record` 文件在改但没记录（在干活）· `await_user` 已问用户在等回复 · `no_report` 有进展没汇报。
-- 派子 agent 时在 prompt 里要求：≤20 分钟一次 `mf ping`；做成一步就 `mf note <id> --kind finding "…"`（bootstrap 期间尤其如此）；
+- 派子 agent 时在 prompt 里要求：≤20 分钟一次 `mf note <id> "在做什么"`；做成一步就 `mf note <id> --kind finding "…"`（bootstrap 期间尤其如此）；
   mf 输出里出现「需要用户确认」时原样带回给你。
 
 ## 并行与资源
@@ -115,4 +114,4 @@ description: >-
   每个热点 kernel 建子任务 `mf new <kid> --repo R --parent <id>`，子任务同样走本流程。
 
 ## 给用户的汇报
-一行结论（复核数字 vs 目标）＋ `mf ms show <id>` 的路线图与方向检查 ＋ 刚完成里程碑的卡片要点 ＋ 下一步 / 需要你做的决定。看板：`mf serve`。
+一行结论（复核数字 vs 目标）＋ `mf status <id>` 的路线图与方向检查 ＋ 刚完成里程碑的卡片要点 ＋ 下一步 / 需要你做的决定。看板：`mf serve`。

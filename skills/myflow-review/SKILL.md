@@ -3,7 +3,7 @@ name: myflow-review
 description: >-
   作为 myflow 里程碑收尾的唯一“复核”角色（精简流程，只做一次）：独立核对入口文档的本里程碑一节、接口表、测试覆盖表和提交卡片
   是否与代码、计划和用例结果一致，缺的直接补、错的直接改（不打回），只为本里程碑新增或改动的逻辑补缺失的用例，跑一遍功能用例后记录。
-  Use when a prompt says "使用 skill myflow-review", or asks to review/close a myflow milestone (mf ms role --role review).
+  Use when a prompt says "使用 skill myflow-review", or asks to review/close a myflow milestone (mf ms review).
   Do not use to change kernel code.
 ---
 
@@ -26,7 +26,7 @@ description: >-
 不改 kernel / 运行时代码，不改 bench。发现代码 bug：不修，写进“已知问题”，并在结果最前面告诉编排者。
 
 ## 步骤
-1. 读计划卡（`mf ms show <task> <M>`：验收、依据）、diff（prompt 里的 `git diff --stat`，再看具体文件）、
+1. 读计划卡（`mf status <task> <M>`：验收、依据）、diff（prompt 里的 `git diff --stat`，再看具体文件）、
    实现者报告（prompt 里给出的 `<task_dir>/notes/<M 或 lane>-report.md`，没有就直接读代码）。
 2. 入口文档的本里程碑一节（最新的在最上面，没有就新建），四项各 ≤5 行：
    - **做了什么**：用评审能核对的说法（文件 / 函数 / 行为），链接到代码；
@@ -63,7 +63,7 @@ description: >-
 推送到 pyhip 的文档和卡片（卡片会进提交信息）一律用中文；代码、标识符、命令保留原文。
 
 ## 结束
-`mf ms role <task> <M> --session <你的会话名> --card <task_dir>/milestones/<M>/card.md -m "<一句话：改了哪些、补了几个用例、用例结果>"`
+`mf ms review <task> <M> --session <你的会话名> --card <task_dir>/milestones/<M>/card.md -m "<一句话：改了哪些、补了几个用例、用例结果>"`
 （本里程碑改动或删除了已有用例 / bench 时，加 `--tests-why "…"`；mf 会提示。）
 
 - 只记录一次；记录之后不要再改 worktree，改了就要重新记录。

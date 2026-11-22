@@ -1,8 +1,8 @@
 """Renderers. One source of truth (events) -> three generated views:
 
 L0 overview   `mf status` / index.html          one line per task: phase, health, best verified, budget
-L1 task       `mf show` / STATUS.md / dashboard  stepper, perf chart, lanes, briefs, alerts, hypotheses
-L2 attempt    `mf show --attempt N` / <details>  per-case numbers, commit, correctness, gates, links
+L1 task       `mf status <task>` / STATUS.md / dashboard  stepper, perf chart, lanes, briefs, alerts, hypotheses
+L2 attempt    `mf status <task> A<n>` / <details>  per-case numbers, commit, correctness, gates, links
 L3 raw        runs/*/out.log, diff.patch, events.jsonl
 """
 
@@ -552,7 +552,7 @@ def _by(who: str) -> str:
 
 
 def defaults_lines(st: State) -> list:
-    """Decisions taken by the defaults while the user was away (mf delegate): listed until the next delegation."""
+    """Decisions taken by the defaults while the user was away (mf decide --delegate): listed until the next delegation."""
     dl, items = st.delegation, st.default_decisions()
     if not dl or not (items or st.delegated()):
         return []
@@ -642,7 +642,7 @@ def status_md(st: State) -> str:
         for c in st.changes[-8:]:
             L.append(f"- {hm(c['t'])} 变更（{c['by']}）`{c['key']}`: {c['old']} → {c['new']} {c['why']}")
         L.append("")
-    L.append("详情：`dashboard.html`（或 `mf serve`）· L2：`mf show <task> --attempt N` · 原始事件：`events.jsonl`")
+    L.append("详情：`dashboard.html`（或 `mf serve`）· L2：`mf status <task> A<n>` · 原始事件：`events.jsonl`")
     return "\n".join(L) + "\n"
 
 
@@ -1005,7 +1005,7 @@ def html_task(st: State, served: bool = False) -> str:
         body.append("<div class='card'><h2>给 agent 留言（steer）</h2><form method='post' action='steer'>"
                     "<textarea name='text' rows='2' placeholder='例如：不要再动 prepare kernel，集中在 union'></textarea>"
                     "<input name='lane' placeholder='lane（可空=全体）' size='12'> <button>发送</button></form>"
-                    "<div class='muted'>agent 下一次调用任何 mf 命令时都会看到这条留言，并需 mf ack 回执。</div></div>")
+                    "<div class='muted'>agent 下一次调用任何 mf 命令时都会看到这条留言，并需 mf note --ack 回执。</div></div>")
     ev_rows = "".join(f"<tr><td>{e.get('seq')}</td><td>{hm(e.get('t'))}</td><td>{esc(e.get('kind'))}</td><td>{esc(e.get('lane', ''))}</td>"
                       f"<td>{esc(e.get('by'))}</td><td>{esc(e.get('title', ''))[:160]}</td></tr>" for e in st.events[-150:][::-1])
     body.append(f"<div class='card'><details><summary><b>事件流（L3，最近 150 条）</b> · <a href='events.jsonl'>events.jsonl</a> · "

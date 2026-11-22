@@ -513,14 +513,14 @@ def role_prompts(st: State, m: dict) -> str:
         f"收尾 {mid} 已就绪：集成 worktree {wt}（候选 {prep['candidate'][:10]}，运行时树 {prep['runtime_tree']}）。",
         "派 1 个独立的复核子 agent（不是实现者的会话），只做一次；下一个里程碑的实现者现在就可以开工（流水线：下一个 prep 时 mf 自动合并本次收尾）：",
         f"prompt：使用 skill myflow-review。任务 {tid} 里程碑 {mid}：对照改动（{diff}）、{wt} 里的代码与用例、"
-        f"实现者报告 {report}、`{mf} show {tid}` 的数据，在入口文档 {entry_p} 写好 / 核对本里程碑一节"
+        f"实现者报告 {report}、`{mf} status {tid} {mid}` 的数据（计划卡、验收数字），在入口文档 {entry_p} 写好 / 核对本里程碑一节"
         "（改了什么、为什么、与计划或上游的差异、已知问题）、基线与对照的来源、覆盖表（情况 → 用例 → 类型 → 结果，及未覆盖 / 跳过清单），"
         f"按测试原则补上本里程碑新增或改动的逻辑缺的用例，把卡片 {d / 'card.md'} 的 «…» 换成实际内容；能改 {dp}，以及 {tp}。"
         "发现与代码不符直接改，不打回。只跑你新增 / 改动的用例文件（完整功能用例由 mf 收尾时在最终提交上跑），然后运行："
-        f"{mf} ms role {tid} {mid} --session <你的会话名> --card {d / 'card.md'} -m \"<一句话>\"（改动或删除了已有用例时加 --tests-why）；"
+        f"{mf} ms review {tid} {mid} --session <你的会话名> --card {d / 'card.md'} -m \"<一句话>\"（改动或删除了已有用例时加 --tests-why）；"
         "输出里若有「需要用户确认【…】」，原样放在给编排者的结果最前面",
         f"最后：{mf} ms close {tid} {mid} --next <已计划的下一个里程碑 id，或 done|report|stop|await-user>",
-        "编排者：子 agent 带回「需要用户确认」时当回合问用户并 mf asked；复核完成后 mf brief 向用户汇报",
+        "编排者：子 agent 带回「需要用户确认」时当回合问用户，并 mf brief <任务> --gate <key>；复核完成后 mf brief 向用户汇报",
     ])
 
 
@@ -578,6 +578,8 @@ def cmd_plan(a):
             "commitment": "tentative" if a.tentative else "committed"}
     append_event(tdir, "ms.plan", a.title or m["title"], by="agent",
                  **{k: v for k, v in data.items() if v not in (None, "", [])})
+    if getattr(a, "ceiling", None):
+        append_event(tdir, "ceiling", a.basis or f"{a.id} 计划时的估计", by="agent", value=a.ceiling)
     st = State(tdir)
     print("计划卡 " + plan_line(st.milestones[a.id]))
     if st.freeze and mtype == "perf":  # rounds are performance rounds; a docs-only milestone does not start one
@@ -683,7 +685,7 @@ def cmd_prep(a):
             raise MfRefused(f"A{at.get('n')} did not pass ({at.get('status')})")
         candidate, attempt = at["commit"], at.get("n")
         last_pipe = _pipeline_base(st, candidate, parent, f"A{attempt}" if attempt else f"lane {lane} 的头部")
-        # user request 11-22: prep measures what is missing itself (no separate `mf verify` / `mf try` first); when both
+        # user request 11-22: prep measures what is missing itself (no separate verify / `mf try` first); when both
         # numbers are missing, one three-arm run (frozen base / previous milestone / candidate) gives both
         need_inc = parent != st.freeze["base"]
         cumv, problem = _pick_verify(st, candidate)
@@ -806,7 +808,7 @@ def _open_gate(st: State, key: str, text: str) -> None:
 
 def relay_hint(st: State, key: str) -> str:
     """mf only records a gate; a person has to be asked. Printed wherever mf opens one."""
-    return (f"mf 不会自己问用户：编排者现在就在对话里问（不要攒到后面），问完 {cli.MF} asked {st.id} {key}；"
+    return (f"mf 不会自己问用户：编排者现在就在对话里问（不要攒到后面），问完 {cli.MF} brief {st.id} --gate {key} \"<问了什么>\"；"
             f"用户答复后 {cli.MF} decide {st.id} --gate {key} \"<用户原话>\"。子 agent：把这段原样带回给编排者")
 
 
@@ -817,7 +819,7 @@ def _clear_gates(st: State, prefix: str, keep=None, why: str = "") -> None:
             append_event(st.dir, "gate.clear", why, by="mf", gate=key)
 
 
-def cmd_role(a):
+def cmd_review(a):
     """The closing review (user rule 11-21): one independent sub-agent writes / checks the entry document section,
     the coverage table, missing tests and the card, and records once. It may change docs and tests, never code."""
     tdir = task_dir_of(a.task)
@@ -906,7 +908,7 @@ def _close_blockers(st: State, m: dict, tree=None) -> list:
     out, d = [], ms_dir(st, m["id"])
     rv = m["roles"].get("review")
     if not rv:
-        out.append("复核记录（mf ms role … --session <会话> --card …）")
+        out.append("复核记录（mf ms review … --session <会话> --card …）")
     elif tree and rv.get("tree") != tree and not _blocks_only(st, rv.get("tree"), tree):
         out.append("复核记录之后 worktree 又有改动：让复核重新记录，或撤销")
     if rv and file_hash(d / "card.md") != rv.get("card_hash"):
@@ -1199,19 +1201,16 @@ def cmd_revoke(a):
     cli._after(tdir)
 
 
-def cmd_show(a):
-    st = State(task_dir_of(a.task))
-    if a.id:
-        m = _get(st, a.id)
-        print(render.ms_text(st, m))
-        d = ms_dir(st, a.id)
-        # a closed milestone: show what was committed (and pushed), whose Next section mf generated at close
-        src = d / "commit-msg.txt" if m["status"] == "done" and (d / "commit-msg.txt").is_file() else d / "card.md"
-        if src.is_file():
-            print("\n" + src.read_text(encoding="utf-8").strip())
-    else:
-        print(render.roadmap_text(st))
-    cli._after(st.dir)
+def show_text(st: State, mid: str) -> str:
+    """One milestone (`mf status <task> M3`): plan, candidate, numbers, review, and the card as committed."""
+    m = _get(st, mid)
+    out = [render.ms_text(st, m)]
+    d = ms_dir(st, mid)
+    # a closed milestone: show what was committed (and pushed), whose Next section mf generated at close
+    src = d / "commit-msg.txt" if m["status"] == "done" and (d / "commit-msg.txt").is_file() else d / "card.md"
+    if src.is_file():
+        out.append("\n" + src.read_text(encoding="utf-8").strip())
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------- entry document
@@ -1224,19 +1223,3 @@ def _fill_entry(st: State, path: Path, current=None, nxt=None) -> bool:
         path.write_text(new, encoding="utf-8")
         return True
     return False
-
-
-def cmd_doc_render(a):
-    tdir = task_dir_of(a.task)
-    st = State(tdir)
-    if a.file:
-        path = Path(a.file).expanduser().resolve()
-    else:
-        if not st.open_ms or not st.task["doc"].get("entry"):
-            raise MfError("no milestone is closing (generated blocks are written by mf ms prep); pass --file to render elsewhere")
-        _check_entry(st.task["doc"]["entry"])
-        path = Path(st.open_ms["prep"]["wt"]) / st.task["doc"]["entry"]
-    if not path.is_file():
-        raise MfError(f"{path} not found")
-    changed = _fill_entry(st, path, current=st.open_ms)
-    print(f"{path}: {'updated' if changed else 'up to date'}")

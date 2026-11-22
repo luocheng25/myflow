@@ -50,11 +50,14 @@ description: >-
 12. 用户授权按默认值决定（例如“接下来 10 小时有问题按默认值进行”）：先 `mf decide <id> --delegate 10 "<原话>"`。授权期内不问用户：
     需要确认的事按默认值（你在表单里会设为 default 的推荐项）决定，`mf decide <id> [--gate <key>] --default "<选了什么、为什么>"`。
     所有代决的事会单独列在看板上；用户回来时，汇报里先列这些代决事项。
-13. 测试原则（用户 11-22）：
-    - 刚好覆盖：保持用例简洁，已有的精度 / 性能测试能覆盖的就不单独写用例，但不缺失覆盖；
-    - 用例一般分为精度测试、性能测试，以及精度 / 性能测试覆盖不了的项（报错、格式逐位、graph、编译缓存等）；
+13. 测试原则（用户 11-22）：用例分三类，覆盖表也按这三类写，目标是让用户一眼看清测了什么：
+    - **基本功能测试**：简短、数量少，覆盖最常用的主路径（每个公开入口 / 分档 1 例）；用得最多——每次小改动第一个跑它。
+      放进 `commands.correctness`（每次 `mf try` 都先跑），整套控制在 1–2 分钟内；
+    - **性能测试**：bench 的 case 集（`commands.bench`），每个分档至少一个 case；
+    - **其他覆盖测试**：只测前两类覆盖不了的（边界与交界、报错、逐位格式、graph、编译缓存……），每条写明前两类为什么覆盖不了；
+      能覆盖的不再加，除非特殊说明（写明原因）。放进 `commands.verify_extra`（prep 与收尾时在干净 worktree 跑）；
     - 改动或删除已有用例 / bench 不需要用户批准：复核记录时用 `--tests-why` 说明为什么符合原则，mf 写进提交信息；
-    - 违反原则时才问用户：放宽容差、删掉仍需要的覆盖、加与已有用例重复的用例。
+      违反原则时才问用户：放宽容差、删掉仍需要的覆盖、加与已有用例重复的用例。
     派实现者和复核时，把这条原样写进 prompt。
 14. 入口文档必须说明基线与对照的来源：
     - 冻结基线由 mf 生成块给出；
@@ -65,7 +68,7 @@ description: >-
 ## 流程
 | 阶段 | 做什么 | 命令 / 产出 |
 |---|---|---|
-| 1 spec | 读需求和代码；写 `SPEC.md`，重点写第 7 节“我的理解与假设”、第 8 节“待你回答的问题”，并写明性能对照与精度参考的来源、推送目标（URL + 分支）；用 `mf set` 填 commands / parse / scope / metric（bench 写法见 skill `myflow-bench`）以及 `doc.entry`、`doc.paths`、`tests.paths`、`git.url`、`git.branch`（先设好再问：批准需求即同时批准推送目标，之后不再单独问） | `mf new <id> --repo R --goal G --target X [--from /opt/myflow/templates/task.example.json]` → `mf brief --ask`（mf 会附上推送目标）→ 等用户 → `mf decide --gate spec` |
+| 1 spec | 读需求和代码；写 `SPEC.md`，重点写第 7 节“我的理解与假设”、第 8 节“待你回答的问题”，并写明性能对照与精度参考的来源、推送目标（URL + 分支）；用 `mf set` 填 commands（`correctness` = 基本功能测试，`verify_extra` = 其他覆盖测试，见第 13 条）/ parse / scope / metric（bench 写法见 skill `myflow-bench`）以及 `doc.entry`、`doc.paths`、`tests.paths`、`git.url`、`git.branch`（先设好再问：批准需求即同时批准推送目标，之后不再单独问） | `mf new <id> --repo R --goal G --target X [--from /opt/myflow/templates/task.example.json]` → `mf brief --ask`（mf 会附上推送目标）→ 等用户 → `mf decide --gate spec` |
 | 2 freeze | 冻结基线（正确性必须先在基线通过）。**新算子**基线上还没有它：先做 bootstrap M0（见下），再以 M0 冻结 | `mf freeze <id>` |
 | 3 survey（只在新的算子类别 / 没有可用经验时） | 先读经验卡 `/opt/myflow/knowledge/INDEX.md`；再按 `survey.repos` 每个 repo 派一个只读 explore 子 agent 找同类实现 | `survey.md`（≤1 页表：来源·技术·适用性·预计收益·证据）→ `mf note <id> --kind survey --file survey.md` |
 | 4 plan | 估上限（roofline / Amdahl）；按“收益×把握÷成本”排序；**本轮的里程碑计划卡**；选互不冲突（改不同文件）的 lane | `mf ms plan <id> M<k> --title … --type perf --expect 1.10 --basis "…" --ceiling X --goal G1 --hours 8`（再计划下一个，作为“下一步”）；`mf lane new <id> L1 --direction "…"`；`mf ms plan … --ask`（与承诺一致时 mf 只通知，否则等用户） |
@@ -90,7 +93,7 @@ description: >-
 - 新算子：`mf ms bootstrap <id>`（需 spec gate 已批准；阶段进入“功能版”）→ 在 bootstrap worktree 做出功能正确版 + 用例 + bench + 文档骨架 →
   `mf ms plan <id> M0 --type feature …`（开工前要用户确认方向时加 `--ask`，gate【bootstrap】，不顶替冻结后的 plan gate）→ `mf ms prep <id> M0 --bootstrap` → 复核 → `mf ms close` → `mf freeze <id>`（默认以最新的里程碑为基线）。
 - 实现者（bootstrap 子 agent 或 lane）结束时写实现报告 `<task_dir>/notes/<M 或 lane>-report.md`（≤20 行：做了什么 / 为什么 / 与计划的差异 /
-  新逻辑需要哪些用例覆盖 / 已知问题）；bootstrap 期间实现者自己写新逻辑的用例。派发时在 prompt 里写明。
+  新逻辑需要哪些用例覆盖 / 已知问题）；bootstrap 期间实现者按第 13 条自己写新逻辑的用例，每次小改动先跑基本功能测试。派发时在 prompt 里写明。
 - 移植 / 替换类里程碑：开工前把“上游文件 → 目标文件”的对应、目标目录里已有的同名文件和调用方、要保留的现有接口写进计划，`--ask` 请用户确认；
   不要自行按上游目录结构另建一份（试点 M0 因此重做）。
 - 分析 / 维护类里程碑可以不带 lane（只改文档、用例）：`mf ms prep <id> M<k>`。

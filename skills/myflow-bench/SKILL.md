@@ -2,7 +2,7 @@
 name: myflow-bench
 description: >-
   编写或审查 myflow 冻结的正确性测试和 bench（MF_METRIC 输出、计时协议、防作弊检查、机器门禁）。
-  Use when setting up commands.correctness / commands.bench for a myflow task, when benchmark numbers look
+  Use when setting up commands.correctness / commands.verify_extra / commands.bench for a myflow task, when benchmark numbers look
   suspicious (too good, unstable, not reproduced by the verify in mf ms prep), or when asked how to benchmark a GPU kernel
   reliably on AMD (HIP, FlyDSL, Triton, torch). Not for root-causing performance with profilers.
 ---
@@ -22,9 +22,13 @@ description: >-
 - 输入用 `MF_SEED` 播种（复核会换种子）；case 集合与 `SPEC.md` 一致。
 - 打印全部 case，不在 bench 里挑结果（不丢长尾、不按频率筛样本）。
 
-## 正确性
-- 对独立参考（高精度或原实现）逐元素比较；容差写死；覆盖边界 shape（非对齐、最小、最大）。
-- 校验的必须是被计时的那条路径与那个输出。
+## 正确性：三类用例（测试原则见 skill myflow-kernel-opt 第 13 条）
+- `commands.correctness` = **基本功能测试**：简短、数量少，覆盖最常用的主路径（每个公开入口 / 分档 1 例）；
+  每次 `mf try` 都先跑，整套控制在 1–2 分钟内。
+- `commands.verify_extra` = **其他覆盖测试**：边界 shape（非对齐、最小、最大、交界两侧）、报错、graph 等前两类覆盖不了的；
+  prep 与收尾时在干净 worktree 跑。前两类能覆盖的不再加。
+- `commands.bench` = **性能测试**：每个分档至少一个 case。
+- 对独立参考（高精度或原实现）逐元素比较；容差写死。校验的必须是被计时的那条路径与那个输出。
 - 能断言时，断言新路径确实被执行（例如检查 dispatch 选中的 kernel 名），防止静默回退。
 
 ## 常见“假提速”与防法

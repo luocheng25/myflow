@@ -14,7 +14,7 @@ description: >-
 ## 循环
 1. 定一个小而可证伪的改动，用一句话写成 `--idea`（改了什么、为什么应该更快）。
 2. 只在你的 worktree 里改 `scope.allow` 内的文件。
-3. `mf try <task> --lane <lane> --idea "…"`：自动快照提交 → 冻结的正确性测试 → 冻结的 bench → 记录。
+3. `mf try <task> --lane <lane> --idea "…"`：自动快照提交 → 基本功能测试（`commands.correctness`，不过就不跑 bench）→ 冻结的 bench → 记录。
    只想先验证正确性用 `--no-bench`；定义了快速 bench 时可用 `--quick`。
 4. 读输出：状态、自测加速比、逐 case、预算，以及末尾「mf 提醒」。
 5. 需要诊断时用 `mf run <task> --lane <lane> -- <cmd>`（日志进看板）；PMC 加 `--machine-exclusive`。

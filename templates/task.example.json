@@ -11,7 +11,7 @@
     "weights": {}
   },
   "commands": {
-    "_doc": "Commands run with cwd={wt} via bash -c. bench must print one line per case: MF_METRIC case=<name> value=<number>. correctness: exit 0 = pass.",
+    "_doc": "Commands run with cwd={wt} via bash -c. bench must print one line per case: MF_METRIC case=<name> value=<number>. correctness: exit 0 = pass. Test principle (three kinds): correctness = basic functional tests (few, short, run on every mf try); verify_extra = other coverage tests (only what basic and performance tests cannot cover; run in clean worktrees at prep / close); bench = performance tests (at least one case per tier).",
     "setup": "",
     "correctness": "PYTHONPATH={wt} /opt/lc/work/qsa-fp8/venv-fly050/bin/python -m pytest -q -x op_tests/test_flydsl_qsa_sparse_prefill.py",
     "bench": "PYTHONPATH={wt} /opt/lc/work/qsa-fp8/venv-fly050/bin/python {task_dir}/tools/bench_qsa.py --jobs m12000_slots_tp2,m12000_slots_tp4",

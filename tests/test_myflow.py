@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from myflow import cli, guard, kb, render  # noqa: E402
-from myflow.core import State, task_dir_of  # noqa: E402
-from myflow.runner import Lease, parse_metrics, speedup  # noqa: E402
+from myflow.core import MfError, State, task_dir_of  # noqa: E402
+from myflow.runner import Lease, combine_perf, parse_metrics, parse_perf, speedup  # noqa: E402
 
 
 def mf(*args) -> tuple:
@@ -111,9 +111,11 @@ class FlowTest(Base):
 
     def test_full_flow_try_verify_report_done(self):
         tdir = self.ready()
+        self.ok("set", "t1", "perf.peak_tbps=1", "perf.peak_tflops=10")  # display only: no re-freeze
         self.edit(tdir, "L1", r"^SPEED = .*", "SPEED = 1.5")
         out = self.ok("try", "t1", "--lane", "L1", "--idea", "speed 1.5")
         self.assertIn("A1 [L1] 通过", out)
+        self.assertIn("对照 / 吞吐: ", out)
         st = self.st()
         a = st.attempt(1)
         self.assertEqual(a["status"], "pass")
@@ -129,7 +131,16 @@ class FlowTest(Base):
         out = self.ok("report", "t1", "--done")
         self.assertIn("审计通过", out)
         self.assertTrue(self.st().done())
-        self.assertIn("1.5", (tdir / "REPORT.md").read_text())
+        report = (tdir / "REPORT.md").read_text()
+        self.assertIn("1.5", report)
+        # every implementation compared gets TB/s and TFLOPS (share of the configured peak), and the reference row
+        for needle in ("| 对照 µs | 新/对照 | 基线 TB/s | 新 TB/s | 对照 TB/s | 基线 TFLOPS | 新 TFLOPS | 对照 TFLOPS |",
+                       "对照 = ref", "占峰值"):
+            self.assertIn(needle, report)
+        row = next(x for x in report.splitlines() if x.startswith("| small |"))
+        self.assertRegex(row, r"\| 0\.30 \(\d\d\.\d%\) \|")  # 2e6 bytes in ~6.67 us against a 1 TB/s peak
+        self.assertIn("| 0.17 (16.7%) |", row)  # the reference: 2e6 bytes in 12 us
+        self.assertIn("逐 case（最佳复核", (tdir / "STATUS.md").read_text())
         self.assertTrue((tdir / "final.patch").read_text().strip())
         html = (tdir / "dashboard.html").read_text()
         for needle in ("性能轨迹", "Lanes", "独立复核", "A1"):
@@ -278,6 +289,26 @@ class UnitTest(Base):
         self.assertEqual((agg, missing), (2.0, ["b"]))
         agg, _, _ = speedup({"a": 10, "b": 30}, {"a": 5, "b": 30}, {"direction": "min", "aggregate": "sum"})
         self.assertAlmostEqual(agg, 40 / 35)
+
+    def test_parse_perf_work_fields_reference_and_extract(self):
+        text = ("MF_METRIC case=a value=10 unit=us flops=2e7 bytes=4e7\n"
+                "MF_METRIC case=a value=20 unit=us flops=2e7 bytes=4e7\n"
+                "MF_REF case=a impl=aiter value=30 flops=2e7 bytes=8e7 ratio=0.5\n"
+                "MF_REF case=a impl=other value=1\n"  # only the first reference implementation is tabulated
+                "MF_METRIC case=b value=1 unit=ms\n"
+                "INFO case=b ours=1.25TB/s\n")
+        p = parse_perf(text, {"extract": {"tbps": r"^INFO case=(?P<case>\S+) ours=(?P<value>[\d.]+)TB/s"}})
+        a = p["a"]
+        self.assertEqual((a["us"], a["tbps"], a["tflops"]), (15.0, 3.0, 1.5))  # medians of 4.0/2.0 and 2.0/1.0
+        self.assertEqual((a["ref_impl"], a["ref_us"], a["ratio"]), ("aiter", 30.0, 0.5))
+        self.assertAlmostEqual(a["ref_tbps"], 8e7 / 30 / 1e6)
+        self.assertEqual((p["b"]["us"], p["b"]["tbps"]), (1000.0, 1.25))
+        c = combine_perf([p, {"a": {"us": 25.0, "ratio": 0.7, "ref_impl": "aiter"}}])
+        self.assertAlmostEqual(c["a"]["ratio"], 0.6)  # median of the in-run ratios, not a ratio of medians
+        self.assertEqual(c["a"]["ref_impl"], "aiter")
+        self.assertEqual(render.tput(1.704, 5.3), "1.70 (32.2%)")
+        with self.assertRaises(MfError):
+            parse_perf("", {"extract": {"gbps": "x"}})
 
     def test_exclusive_lease_serializes(self):
         order = []

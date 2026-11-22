@@ -71,6 +71,11 @@ DEFAULTS = {
     # max_lines: entry document budget without mf's generated blocks (user request 11-22: easy to read, not long)
     "doc": {"entry": "", "paths": [], "lang": "zh", "max_lines": 150, "max_line_chars": 120},
     "tests": {"paths": []},
+    # display only, never part of the measurement contract (user request 11-22: performance tables show TB/s and
+    # TFLOPS for every implementation compared): device peaks for the "% of peak" cells, and perf.extract regexes
+    # (named groups case / value; fields tbps, tflops, ref_tbps, ref_tflops) for frozen benches that print
+    # throughput elsewhere instead of bytes= / flops= on their MF_METRIC / MF_REF lines
+    "perf": {"peak_tbps": None, "peak_tflops": None, "extract": {}},
 }
 MS_TERMINAL = ("done", "report", "stop", "await-user")
 # What gets published (docs, milestone commit messages, PR descriptions) must be in this language when the task's

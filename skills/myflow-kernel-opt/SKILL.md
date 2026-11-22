@@ -17,7 +17,8 @@ description: >-
 每条 `mf` 输出末尾的「mf 提醒」必须先处理再继续。超过 20 分钟没有其他 mf 调用时（读代码、调研），`mf note <id> "在做什么"`。
 
 ## 铁律
-1. 性能数字只来自 `mf try`（自测、未配对）和 `mf ms prep` 的复核（官方：干净 worktree + 同卡 ABBA）。向用户汇报时引用 `mf status` 的表。
+1. 性能数字只来自 `mf try`（自测、未配对）和 `mf ms prep` 的复核（官方：干净 worktree + 同卡 ABBA）。向用户汇报时引用 `mf status` 的表；
+   性能数据（含与对照的比较）每个实现都带耗时、TB/s 与 TFLOPS（括号内占峰值），用 mf 表格的列，不另算（用户 11-22）。
 2. gate=ask 的阶段：`mf brief <id> --ask "…"`（≤600 字）后**停下来问用户**；得到回复再 `mf decide <id> --gate <key> "…" --quote "<用户原话>"`。绝不替用户批准。
 3. 冻结后 lane 不改 oracle（`scope.protect` 下的用例与 bench），也不改度量契约（bench / 正确性命令、`scope.protect` 等）；必须改契约时先问用户，再 `mf set` + `mf freeze`。收尾时复核可按第 13 条补 / 改用例（bench 除外）。
 4. 遇到 REFUSED（exit 3）或 crit 预警：停止派发，向用户汇报现状并给出选项。
@@ -70,7 +71,7 @@ description: >-
 ## 流程
 | 阶段 | 做什么 | 命令 / 产出 |
 |---|---|---|
-| 1 spec | 读需求和代码；写 `SPEC.md`，重点写第 7 节“我的理解与假设”、第 8 节“待你回答的问题”，并写明性能对照与精度参考的来源、推送目标（URL + 分支）；用 `mf set` 填 commands（`correctness` = 基本功能测试，`verify_extra` = 其他覆盖测试，见第 13 条）/ parse / scope / metric（bench 写法见 skill `myflow-bench`）以及 `doc.entry`、`doc.paths`、`tests.paths`、`git.url`、`git.branch`（先设好再问：批准需求即同时批准推送目标，之后不再单独问） | `mf new <id> --repo R --goal G --target X [--from /opt/myflow/templates/task.example.json]` → `mf brief --ask`（mf 会附上推送目标）→ 等用户 → `mf decide --gate spec` |
+| 1 spec | 读需求和代码；写 `SPEC.md`，重点写第 7 节“我的理解与假设”、第 8 节“待你回答的问题”，并写明性能对照与精度参考的来源、推送目标（URL + 分支）；用 `mf set` 填 commands（`correctness` = 基本功能测试，`verify_extra` = 其他覆盖测试，见第 13 条）/ parse / scope / metric / perf（器件峰值 `perf.peak_tbps`、`perf.peak_tflops`；bench 写法含 flops / bytes / MF_REF，见 skill `myflow-bench`）以及 `doc.entry`、`doc.paths`、`tests.paths`、`git.url`、`git.branch`（先设好再问：批准需求即同时批准推送目标，之后不再单独问） | `mf new <id> --repo R --goal G --target X [--from /opt/myflow/templates/task.example.json]` → `mf brief --ask`（mf 会附上推送目标）→ 等用户 → `mf decide --gate spec` |
 | 2 freeze | 冻结基线（正确性必须先在基线通过）。**新算子**基线上还没有它：先做 bootstrap M0（见下），再以 M0 冻结 | `mf freeze <id>` |
 | 3 survey（只在新的算子类别 / 没有可用经验时） | 先查经验卡（`mf kb search <词>`；索引是 `mf config` 所示 kb 目录下的 INDEX.md）；再按 `survey.repos` 每个 repo 派一个只读 explore 子 agent 找同类实现 | `survey.md`（≤1 页表：来源·技术·适用性·预计收益·证据）→ `mf note <id> --kind survey --file survey.md` |
 | 4 plan | 估上限（roofline / Amdahl）；按“收益×把握÷成本”排序；**本轮的里程碑计划卡**；选互不冲突（改不同文件）的 lane | `mf ms plan <id> M<k> --title … --type perf --expect 1.10 --basis "…" --ceiling X --goal G1 --hours 8`（再计划下一个，作为“下一步”）；`mf lane new <id> L1 --direction "…"`；`mf ms plan … --ask`（与承诺一致时 mf 只通知，否则等用户） |
@@ -119,4 +120,5 @@ description: >-
   每个热点 kernel 建子任务 `mf new <kid> --repo R --parent <id>`，子任务同样走本流程。
 
 ## 给用户的汇报
-一行结论（复核数字 vs 目标）＋ `mf status <id>` 的路线图与方向检查 ＋ 刚完成里程碑的卡片要点 ＋ 下一步 / 需要你做的决定。看板：`mf serve`。
+一行结论（复核数字 vs 目标）＋ 逐 case 性能表（基线 / 新 / 对照的耗时、TB/s、TFLOPS 与占峰值，取自 STATUS.md 或 REPORT.md）
+＋ `mf status <id>` 的路线图与方向检查 ＋ 刚完成里程碑的卡片要点 ＋ 下一步 / 需要你做的决定。看板：`mf serve`。

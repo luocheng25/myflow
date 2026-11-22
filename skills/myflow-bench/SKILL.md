@@ -10,8 +10,15 @@ description: >-
 # 冻结的正确性测试与 bench
 
 ## 输出约定
-- bench：每个 case 打印一行 `MF_METRIC case=<名字> value=<数字> [unit=us]`；同一 case 多行取中位数。
+- bench：每个 case 打印一行 `MF_METRIC case=<名字> value=<数字> [unit=us] [flops=<F>] [bytes=<B>]`；同一 case 多行取中位数。
   也可用 `parse.mode=regex`（命名组 case/value）或 `json`（`{run}/metrics.json`），见 `/opt/myflow/templates/task.example.json`。
+- 对照实现（同进程、同协议计时）：每个 case 打印 `MF_REF case=<名字> impl=<名字> value=<数字> [unit=us] [flops=] [bytes=]`，
+  只进表格不进指标；只取第一个 impl。
+- 吞吐（用户 11-22：性能数据含对照一律带 TFLOPS 与带宽）：F = 每次调用的运算量（GEMM 计 2·M·N·K），
+  B = 每次调用最少必须搬运的字节（用到的权重 / 输入各读一次、输出写一次，按各实现自己的数据格式算）。
+  mf 据此在 STATUS.md 逐 case、REPORT.md、入口文档生成块和 try / 复核输出里给出每个实现的 TB/s、TFLOPS；
+  在 task 里设器件峰值 `perf.peak_tbps`、`perf.peak_tflops` 显示占峰值。已冻结、只在别处打印吞吐的 bench
+  不改，用 `perf.extract`（字段 tbps / tflops / ref_tbps / ref_tflops，正则命名组 case / value）读出。
 - 正确性：exit 0 = 通过。两者都放进 `scope.protect`，`mf freeze` 后就不能再改。
 - 参考实现：`/opt/myflow/examples/torch-rmsnorm/make_repo.sh` 里的 `bench.py` 和 `test_kernel.py`。
 

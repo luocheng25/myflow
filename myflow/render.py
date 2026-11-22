@@ -18,9 +18,10 @@ import unicodedata
 from pathlib import Path
 
 from myflow import guard
-from myflow.core import (MS_TERMINAL, PASS, PHASE_ZH, PHASES, VALID_VERDICTS, State, all_task_dirs, atomic_write,
-                         home)
+from myflow.core import (MS_TERMINAL, PASS, PHASE_ZH, PHASES, VALID_VERDICTS, MfError, State, all_task_dirs,
+                         atomic_write, home)
 from myflow.gitops import github_web
+from myflow.runner import combine_perf, parse_perf
 
 ICON = {"crit": "✖", "warn": "⚠", "ask": "?", "info": "·", "ok": "●"}
 LANE_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b", "#e377c2",
@@ -502,16 +503,20 @@ def entry_blocks(st: State, current=None, nxt=None) -> dict:
         inc_s = latest["prep"].get("inc") or {}
         inc = _verify_n(st, inc_s.get("v")) if inc_s.get("v") != latest["prep"]["cum"]["v"] else None
         vs = f"，相对 {inc_s.get('against_ms') or '上一里程碑'} {fx(inc_s.get('speedup'))}" if inc else ""
-        cases = sorted((cum.get("per_case") or {}).items())
+        cases = [(c, cum["per_case"][c]) for c in case_order(cum.get("per_case") or {})]
+        pa, pb = verify_perf(st, cum)
+        heads, extra, legend = perf_cols(st, [c for c, _ in cases], pa, pb, ("基线", "当前"))
         # the per-case numbers stay verifiable but folded: the design document states the conclusion per tier
         perf = [f"最近的性能里程碑 {latest['id']}：相对冻结基线 {fx(cum.get('speedup'))}{vs}（mf 复核 V{cum.get('n')}："
                 f"同卡 ABBA {cum.get('pairs')} 对，{gpu_txt(cum.get('gpu'))}，噪声 {pct(cum.get('noise'))}）。", "",
                 f"<details><summary>逐 case（{len(cases)} 个，mf 生成）</summary>", "",
-                "| case | 基线 | 当前 | 累计加速 | 增量加速 |", "|---|---|---|---|---|"]
+                "| case | 基线 | 当前 | 累计加速 | 增量加速 |" + "".join(f" {h} |" for h in heads),
+                "|---" * (5 + len(heads)) + "|"]
         for c, d in cases:
             ic = ((inc or {}).get("per_case") or {}).get(c, {}).get("speedup")
-            perf.append(f"| {c} | {_num(d.get('a'))} | {_num(d.get('b'))} | {fx(d.get('speedup'))} | {fx(ic) if inc else '—'} |")
-        perf += ["", "</details>"]
+            perf.append(f"| {c} | {_num(d.get('a'))} | {_num(d.get('b'))} | {fx(d.get('speedup'))} | {fx(ic) if inc else '—'} |"
+                        + "".join(f" {x} |" for x in extra[c]))
+        perf += (["", legend] if legend else []) + ["", "</details>"]
     src = baseline_source(st)
     if src:
         perf = [src, ""] + perf
@@ -535,6 +540,102 @@ def baseline_source(st: State) -> str:
 
 def _num(x) -> str:
     return f"{x:g}" if isinstance(x, (int, float)) else "—"
+
+
+def case_order(cases) -> list:
+    """Cases in natural order (tp2_m1, tp2_m16, tp2_m128 ...), not as strings."""
+    return sorted(cases, key=lambda c: [(0, int(t), "") if t.isdigit() else (1, 0, t) for t in re.split(r"(\d+)", c)])
+
+
+# ---------------------------------------------------------------- throughput (display only, from raw logs)
+
+_PERF_CACHE: dict = {}
+
+
+def _log_perf(st: State, log) -> dict:
+    p = Path(str(log))
+    cfg = st.task.get("perf") or {}
+    try:
+        key = (str(p), p.stat().st_mtime_ns, json.dumps(cfg, sort_keys=True))
+    except OSError:
+        return {}
+    if key not in _PERF_CACHE:
+        try:
+            _PERF_CACHE[key] = parse_perf(p.read_text(encoding="utf-8", errors="replace"), cfg)
+        except (OSError, ValueError, re.error, MfError):
+            _PERF_CACHE[key] = {}
+    return _PERF_CACHE[key]
+
+
+def perf_of(st: State, logs) -> dict:
+    """Per-case throughput over the raw bench logs of one implementation (median over runs)."""
+    return combine_perf([_log_perf(st, x) for x in logs or []])
+
+
+def verify_perf(st: State, v: dict) -> tuple:
+    """(reference arm, candidate) throughput of a verify, re-derived from the raw logs of its paired runs."""
+    try:
+        arms = json.loads((Path(v["run"]) / "abba.json").read_text())["arms"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}, {}
+    ref = "P" if v.get("arms") == 3 and v.get("against") else "A"
+    return tuple(perf_of(st, [x["log"] for x in arms if x.get("arm") == k]) for k in (ref, "B"))
+
+
+def freeze_perf(st: State) -> dict:
+    run = (st.freeze or {}).get("run")
+    return perf_of(st, sorted(Path(run).glob("bench*/out.log"))) if run else {}
+
+
+def _rate(x) -> str:
+    return f"{x:.2f}" if x < 10 else f"{x:.1f}" if x < 100 else f"{x:.0f}"
+
+
+def tput(x, peak=None) -> str:
+    """Throughput with its share of the device peak, e.g. '1.70 (32.1%)'."""
+    if not isinstance(x, (int, float)):
+        return "—"
+    return _rate(x) + (f" ({x / peak * 100:.1f}%)" if peak else "")
+
+
+def perf_cols(st: State, cases, base: dict, new: dict, labels=("基线", "新")) -> tuple:
+    """Extra table columns for every implementation compared: the reference's time and ratio, then TB/s and TFLOPS
+    of the baseline, the candidate and the reference. Returns (headers, {case: cells}, legend); only columns some
+    case has data for (benches print bytes= / flops= / MF_REF, or perf.extract reads them)."""
+    pk = st.task.get("perf") or {}
+    tb, tf = pk.get("peak_tbps"), pk.get("peak_tflops")
+    b, n = labels
+    spec = [("对照 µs", lambda c: new.get(c, {}).get("ref_us"), lambda x: f"{x:.2f}"),
+            (f"{n}/对照", lambda c: new.get(c, {}).get("ratio"), lambda x: f"{x:.3f}"),
+            (f"{b} TB/s", lambda c: base.get(c, {}).get("tbps"), lambda x: tput(x, tb)),
+            (f"{n} TB/s", lambda c: new.get(c, {}).get("tbps"), lambda x: tput(x, tb)),
+            ("对照 TB/s", lambda c: new.get(c, {}).get("ref_tbps"), lambda x: tput(x, tb)),
+            (f"{b} TFLOPS", lambda c: base.get(c, {}).get("tflops"), lambda x: tput(x, tf)),
+            (f"{n} TFLOPS", lambda c: new.get(c, {}).get("tflops"), lambda x: tput(x, tf)),
+            ("对照 TFLOPS", lambda c: new.get(c, {}).get("ref_tflops"), lambda x: tput(x, tf))]
+    spec = [s for s in spec if any(isinstance(s[1](c), (int, float)) for c in cases)]
+    cells = {c: [fmt(get(c)) if isinstance(get(c), (int, float)) else "—" for _, get, fmt in spec] for c in cases}
+    if not spec:
+        return [], cells, ""
+    impl = next((d["ref_impl"] for d in new.values() if d.get("ref_impl")), None)
+    peaks = "、".join(x for x in (f"带宽 {tb:g} TB/s" if tb else "", f"算力 {tf:g} TFLOPS" if tf else "") if x)
+    legend = ("TB/s、TFLOPS = bench 给出的每次调用数据量 / 运算量 ÷ 中位耗时" + (f"，括号内占峰值（{peaks}）" if peaks else "")
+              + (f"；对照 = {impl}（MF_REF，同一 bench 进程、同一协议）" if impl else ""))
+    return [s[0] for s in spec], cells, legend
+
+
+def perf_line(st: State, perf: dict, limit: int = 6) -> str:
+    """Console view of one implementation's throughput: the cases slowest against the reference first."""
+    pk = st.task.get("perf") or {}
+    items = sorted(perf.items(), key=lambda kv: (-(kv[1].get("ratio") or 0), kv[0]))[:limit]
+    parts = []
+    for c, d in items:
+        x = [c] + ([f"{d['ratio']:.3f}×对照"] if d.get("ratio") else [])
+        x += [f"{tput(d[k], pk.get(p))} {u}" for k, p, u in (("tbps", "peak_tbps", "TB/s"), ("tflops", "peak_tflops", "TFLOPS"))
+              if isinstance(d.get(k), (int, float))]
+        if len(x) > 1:
+            parts.append(" ".join(x))
+    return " | ".join(parts)
 
 
 def fill_blocks(text: str, blocks: dict) -> str:
@@ -647,6 +748,17 @@ def status_md(st: State) -> str:
           "|---|---|---|---|---|---|",
           f"| {base} | **{fx(bv and bv['speedup'])}** {bv_who} | {fx(bs and bs['speedup'])} {bs_who} | {st.target:g}× | "
           f"{ceil} | {prog} |", ""]
+    if bv:
+        cs = case_order(bv.get("per_case") or {})
+        heads, extra, legend = perf_cols(st, cs, *verify_perf(st, bv))
+        if heads:
+            L += [f"逐 case（最佳复核 V{bv.get('n')}，耗时 µs）", "",
+                  "| case | 基线 | 新 | 加速 |" + "".join(f" {h} |" for h in heads), "|---" * (4 + len(heads)) + "|"]
+            for c in cs:
+                d = bv["per_case"][c]
+                L.append(f"| {c} | {_num(d.get('a'))} | {_num(d.get('b'))} | {fx(d.get('speedup'))} |"
+                         + "".join(f" {x} |" for x in extra[c]))
+            L += ["", legend, ""]
     b = t["budget"]
     L.append(f"预算：尝试 {len(st.attempts)}/{b.get('max_attempts')} · 时间 {st.hours:.1f}/{b.get('max_hours')}h · "
              f"{stall_txt(st)}")
@@ -716,9 +828,12 @@ def text_attempt(st: State, n: int) -> str:
     if a.get("problems"):
         L.append("  问题: " + "; ".join(a["problems"][:8]))
     if a.get("per_case"):
+        pb = perf_of(st, [(a.get("bench") or {}).get("log")] if (a.get("bench") or {}).get("log") else [])
         L.append(f"  自测加速比（对冻结基线，未配对）: {fx(a.get('speedup'))}")
         for c, s in sorted(a["per_case"].items(), key=lambda kv: kv[1]):
-            L.append(f"    {pad(c, 40)} {fx(s)}  ({a.get('metrics', {}).get(c)} vs base {st.freeze['baseline'].get(c) if st.freeze else '?'})")
+            bits = perf_line(st, {c: pb[c]}) if c in pb else ""
+            L.append(f"    {pad(c, 40)} {fx(s)}  ({a.get('metrics', {}).get(c)} vs base {st.freeze['baseline'].get(c) if st.freeze else '?'})"
+                     + (f"  {bits[len(c) + 1:]}" if bits else ""))
     for v in [v for v in st.verifies if v.get("attempt") == n]:
         what = f"增量 V{v.get('n')}（对 {v.get('against_ms') or str(v.get('against'))[:9]}）" if v.get("against") else f"复核 V{v.get('n')}"
         L.append(f"  {what}: {STATUS_ZH.get(v.get('verdict'), v.get('verdict'))} {fx(v.get('speedup'))} "
@@ -910,9 +1025,15 @@ def _per_case_table(st: State, a: dict) -> str:
     if not pc:
         return ""
     base = (st.freeze or {}).get("baseline", {})
+    log = (a.get("bench") or {}).get("log")
+    cs = [c for c, _ in sorted(pc.items(), key=lambda kv: kv[1])]
+    heads, extra, legend = perf_cols(st, cs, freeze_perf(st), perf_of(st, [log] if log else []), ("基线", "本次"))
     rows = "".join(f"<tr><td>{esc(c)}</td><td class='num'>{base.get(c, '')}</td><td class='num'>{(a.get('metrics') or {}).get(c, '')}</td>"
-                   f"<td class='num'>{fx(s)}</td></tr>" for c, s in sorted(pc.items(), key=lambda kv: kv[1]))
-    return f"<table><tr><th>case</th><th class='num'>基线</th><th class='num'>本次</th><th class='num'>自测加速</th></tr>{rows}</table>"
+                   f"<td class='num'>{fx(pc[c])}</td>" + "".join(f"<td class='num'>{esc(x)}</td>" for x in extra[c]) + "</tr>"
+                   for c in cs)
+    hs = "".join(f"<th class='num'>{esc(h)}</th>" for h in heads)
+    return (f"<table><tr><th>case</th><th class='num'>基线</th><th class='num'>本次</th><th class='num'>自测加速</th>{hs}</tr>"
+            f"{rows}</table>" + (f"<div class='muted'>{esc(legend)}</div>" if legend else ""))
 
 
 def _link(st: State, p, label=None) -> str:

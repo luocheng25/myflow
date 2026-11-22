@@ -45,7 +45,9 @@ for m, n in ((4096, 4096), (16384, 4096), (8192, 8192)):
         e.record()
         torch.cuda.synchronize()
         times.append(s.elapsed_time(e) * 1000.0)
-    print(f"MF_METRIC case=m{m}_n{n} value={statistics.median(times):.3f} unit=us", flush=True)
+    # work of one call: read x and w, write y (bf16); ~4 flops per element
+    print(f"MF_METRIC case=m{m}_n{n} value={statistics.median(times):.3f} unit=us flops={4 * m * n} "
+          f"bytes={(2 * m * n + n) * 2}", flush=True)
 PY
 cat > test_kernel.py <<'PY'
 """Frozen correctness: fp32 reference, odd shapes, tolerance 2e-2 (bf16 output). Exit 0 = pass."""

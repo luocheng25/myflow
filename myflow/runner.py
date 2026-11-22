@@ -334,6 +334,72 @@ def parse_metrics(text: str, cfg: dict, ctx: dict):
     return {c: statistics.median(v) for c, v in vals.items() if v}, vals
 
 
+_REF_LINE = re.compile(r"^\s*MF_REF\s+(.*)$", re.M)
+_TO_US = {"ns": 1e-3, "us": 1.0, "ms": 1e3, "s": 1e6}
+PERF_EXTRACT = ("tbps", "tflops", "ref_tbps", "ref_tflops")
+
+
+def parse_perf(text: str, cfg: dict) -> dict:
+    """Throughput of one bench run, for display only (never the metric): {case: {field: value}}.
+    us / tbps / tflops: the measured implementation (MF_METRIC with bytes= / flops= per call, or perf.extract regexes);
+    ref_impl / ref_us / ref_tbps / ref_tflops: the first reference implementation of MF_REF lines (same run, same
+    protocol); ratio = us / ref_us within the run. Repeated lines -> median."""
+    vals, impl, first = {}, {}, None
+
+    def add(case, field, v):
+        if v is not None and math.isfinite(v):
+            vals.setdefault(case, {}).setdefault(field, []).append(v)
+
+    def us_of(kv):
+        try:
+            return float(kv["value"]) * _TO_US[kv.get("unit", "us")]
+        except (KeyError, ValueError):
+            return None
+
+    def rate(kv, key, us):  # bytes or flops per call over µs -> TB/s or TFLOPS
+        try:
+            return float(kv[key]) / us / 1e6 if us and key in kv else None
+        except ValueError:
+            return None
+
+    for line_re, prefix in ((_MF_LINE, ""), (_REF_LINE, "ref_")):
+        for m in line_re.finditer(text):
+            kv = {k: v.strip('"') for k, v in _KV.findall(m.group(1))}
+            case = kv.get("case", "default")
+            if prefix:
+                first = first or kv.get("impl", "ref")
+                if kv.get("impl", "ref") != first:
+                    continue
+                impl[case] = first
+            us = us_of(kv)
+            add(case, prefix + "us", us)
+            add(case, prefix + "tbps", rate(kv, "bytes", us))
+            add(case, prefix + "tflops", rate(kv, "flops", us))
+    for field, pattern in ((cfg or {}).get("extract") or {}).items():
+        if field not in PERF_EXTRACT:
+            raise MfError(f"perf.extract.{field}: unknown field (one of {', '.join(PERF_EXTRACT)})")
+        for m in re.compile(pattern, re.M).finditer(text):
+            gd = m.groupdict()
+            add(gd.get("case") or "default", field, float(gd["value"]))
+    out = {c: {f: statistics.median(v) for f, v in d.items()} for c, d in vals.items()}
+    for c, d in out.items():
+        if c in impl:
+            d["ref_impl"] = impl[c]
+        if d.get("us") and d.get("ref_us"):
+            d["ratio"] = d["us"] / d["ref_us"]
+    return out
+
+
+def combine_perf(runs: list) -> dict:
+    """Per case, the median over runs of each field (ratio: of the in-run ratios, i.e. paired in the same process)."""
+    out = {}
+    for r in runs:
+        for c, d in (r or {}).items():
+            for f, v in d.items():
+                out.setdefault(c, {}).setdefault(f, []).append(v)
+    return {c: {f: (v[0] if isinstance(v[0], str) else statistics.median(v)) for f, v in d.items()} for c, d in out.items()}
+
+
 def _w(weights: dict, case: str) -> float:
     return float(weights.get(case, 1.0)) if weights else 1.0
 

@@ -24,7 +24,8 @@ def run(xs):
 PY
 printf '.boost\n' > .gitignore
 cat > bench.py <<'PY'
-"""Frozen bench: prints MF_METRIC lines (simulated latency with ~0.5% noise)."""
+"""Frozen bench: prints MF_METRIC lines (simulated latency with ~0.5% noise) with the work of one call, and the
+reference implementation's time (MF_REF) measured the same way."""
 import os
 import random
 
@@ -32,8 +33,10 @@ import kernel
 
 rng = random.Random(int(os.environ.get("MF_SEED", "0")) ^ os.getpid())
 for case, base_us in (("small", 10.0), ("medium", 100.0), ("large", 1000.0)):
+    work = f"flops={base_us * 1e6:.0f} bytes={base_us * 2e5:.0f}"
     for _ in range(5):
-        print(f"MF_METRIC case={case} value={base_us / kernel.SPEED * (1 + rng.gauss(0, 0.005)):.4f} unit=us")
+        print(f"MF_METRIC case={case} value={base_us / kernel.SPEED * (1 + rng.gauss(0, 0.005)):.4f} unit=us {work}")
+    print(f"MF_REF case={case} impl=ref value={base_us * 1.2:.4f} unit=us {work}")
 PY
 cat > test_kernel.py <<'PY'
 """Frozen correctness test: exit 0 = pass."""

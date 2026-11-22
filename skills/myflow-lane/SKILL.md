@@ -16,7 +16,8 @@ description: >-
 2. 只在你的 worktree 里改 `scope.allow` 内的文件。
 3. `mf try <task> --lane <lane> --idea "…"`：自动快照提交 → 基本功能测试（`commands.correctness`，不过就不跑 bench）→ 冻结的 bench → 记录。
    只想先验证正确性用 `--no-bench`；定义了快速 bench 时可用 `--quick`。
-4. 读输出：状态、自测加速比、逐 case、预算，以及末尾「mf 提醒」。
+4. 读输出：状态、自测加速比、逐 case、「对照 / 吞吐」行（÷ 对照、TB/s、TFLOPS），预算，以及末尾「mf 提醒」；
+   发现与报告里的性能数字同样带 TB/s 或 TFLOPS（占峰值），判断离上限还有多远。
 5. 需要诊断时用 `mf run <task> --lane <lane> -- <cmd>`（日志进看板）；PMC 加 `--machine-exclusive`。
 6. 超过 20 分钟没有 mf 调用（读代码、长时间编译）时：`mf note <task> --lane <lane> "在做什么"`。
 

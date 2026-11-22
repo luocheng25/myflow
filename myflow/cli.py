@@ -657,6 +657,9 @@ def _try_locked(a, st: State, ln: dict, kind: str):
         print("  问题: " + "; ".join(data["problems"][:8]))
     if data.get("per_case"):
         print(f"  cases: {_cases_line(data['per_case'])}")
+        line = render.perf_line(st, render.perf_of(st, [data["bench"]["log"]]))
+        if line:
+            print(f"  对照 / 吞吐: {line}")
     print(f"  commit {commit[:10]} +{diff['ins']}/-{diff['del']} {diff['files']} files · run {run_dir}")
     b = t["budget"]
     ln = st.lanes[a.lane]
@@ -800,6 +803,9 @@ def _record_verify(st: State, lane, at: dict, data: dict, verdict, reason, again
         print(f"  {reason}")
     if data.get("per_case"):
         print(f"  cases: {_cases_line({c: d['speedup'] for c, d in data['per_case'].items()})}")
+        line = "" if against else render.perf_line(st, render.verify_perf(st, data)[1])
+        if line:
+            print(f"  对照 / 吞吐: {line}")
     if data.get("regressed"):
         print(f"  ⚠ 变慢超阈值的 case: {', '.join(data['regressed'][:8])}")
     print(f"  run {run_dir}")
@@ -1169,11 +1175,17 @@ def cmd_report(a):
         L += ["## 摘要（agent）", *[f"- {n['title']}" for n in summ[-3:]], ""]
     L.append("## 最终结果（独立复核）")
     if final:
+        cs = render.case_order(final.get("per_case", {}))
+        heads, extra, legend = render.perf_cols(st, cs, *render.verify_perf(st, final))
         L += [f"**{render.fx(final['speedup'])}**（A{final.get('attempt')} [{final.get('lane')}]，提交 `{final['commit'][:12]}`，"
               f"ABBA {final.get('pairs')} 对，{render.gpu_txt(final.get('gpu'))}，噪声 {render.pct(final.get('noise'))}，结论 {final.get('verdict')}）", "",
-              "| case | 基线 | 新 | 加速 | 噪声 |", "|---|---|---|---|---|"]
-        for c, d in sorted(final.get("per_case", {}).items()):
-            L.append(f"| {c} | {d.get('a'):g} | {d.get('b'):g} | {render.fx(d.get('speedup'))} | {render.pct(d.get('noise'))} |")
+              "| case | 基线 µs | 新 µs | 加速 | 噪声 |" + "".join(f" {h} |" for h in heads), "|---" * (5 + len(heads)) + "|"]
+        for c in cs:
+            d = final["per_case"][c]
+            L.append(f"| {c} | {d.get('a'):g} | {d.get('b'):g} | {render.fx(d.get('speedup'))} | {render.pct(d.get('noise'))} |"
+                     + "".join(f" {x} |" for x in extra[c]))
+        if legend:
+            L += ["", legend]
         patch = tdir / "final.patch"
         write_patch(Path(t["repo"]), st.freeze["base"], final["commit"], patch)
         L += ["", f"补丁：`{patch}`（git diff 基线..最终提交）", ""]

@@ -22,6 +22,12 @@
   "parse": {
     "mode": "mf"
   },
+  "perf": {
+    "_doc": "Display only (not the contract). Tables show TB/s and TFLOPS of every implementation compared when the bench prints flops= / bytes= (per call) on MF_METRIC and MF_REF lines; peaks give the share of peak (here MI308X: HBM 5.3 TB/s, FP8 dense ~606 TFLOPS). A frozen bench that prints throughput elsewhere: extract = {tbps|tflops|ref_tbps|ref_tflops: regex with named groups case and value}.",
+    "peak_tbps": 5.3,
+    "peak_tflops": 606,
+    "extract": {}
+  },
   "env": {
     "FLYDSL_RUNTIME_CACHE_DIR": "{lane_dir}/cache/flydsl",
     "TMPDIR": "{lane_dir}/tmp"

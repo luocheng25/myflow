@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# myflow CLI shim: works from any directory; stdlib-only Python >= 3.8.
+here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+exec "${MYFLOW_PYTHON:-python3}" -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from myflow.cli import main; sys.exit(main())' "$here" "$@"

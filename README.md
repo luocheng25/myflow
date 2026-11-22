@@ -55,6 +55,7 @@ examples/toy/demo.sh                          # 可选：约 10 秒的 CPU 演�
 |---|---|
 | 完成了哪些里程碑，各改了什么、为什么 | GitHub 分支上的里程碑提交（tag `<任务>-M<k>`）；提交信息末尾是该 tag 下渲染好的入口文档链接 |
 | 整体设计、关键取舍、覆盖了哪些情况、基线从哪来 | 入口文档（试点：`src/pyhip/ops/moe/flydsl/a8w4_ptpc/README.md`） |
+| 某个 kernel 的任务划分与逐拍流水线 | 入口文档同目录的 `kernels.md`（入口文档第 2 节有链接） |
 | 现在在做什么、有没有跑偏 | `mf status <任务>`：路线图（✅ 已推送 · 🔄 收尾中 · ⏳ 承诺）、方向检查（承诺兑现、预测偏差、规模、收益曲线…）、提醒 |
 | 某个里程碑 / 某次尝试的细节 | `mf status <任务> M3` · `mf status <任务> A7` |
 | 网页 | `mf serve`：看板、渲染 Markdown、直接批准问题、给 agent 留言（VS Code Remote 需在 Ports 面板转发端口） |
@@ -163,7 +164,7 @@ mf 挂起的问题，agent 30 分钟内没有转达给你，会升为严重预�
 ```
 bin/mf                 CLI 入口            myflow/            实现（core/runner/gitops/guard/render/serve/kb/cli/ms）
 skills/                5 个 skill          knowledge/         经验卡 cards/ + 生成的 INDEX.md
-templates/             SPEC / lane brief / 入口文档 / 经验卡 / task 示例
+templates/             SPEC / lane brief / 入口文档 / kernel 设计说明 / 经验卡 / task 示例
 examples/toy           CPU 演示            examples/torch-rmsnorm   真实 GPU 示例（bench/正确性参考写法）
 docs/DESIGN.md         方案与取舍          tests/             自测（mf selftest）
 ~/.myflow/             registry.json · STATUS.md · index.html · locks/ · tasks/<id>/{task.json,SPEC.md,events.jsonl,STATUS.md,dashboard.html,runs/,lanes/,wt/,milestones/,notes/,tools/}

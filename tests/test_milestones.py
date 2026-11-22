@@ -74,7 +74,7 @@ class MilestoneTest(MilestoneBase):
         wt = tdir / "wt" / "_ms"
         entry = (wt / "docs" / "ENTRY.md").read_text()
         self.assertIn("由 mf 生成", entry)
-        self.assertIn("| M1 | ✅ 本提交", entry)
+        self.assertIn("- M1 ✅ 本提交 · 性能 · speed 1.3", entry)  # one line per milestone: the commit has the details
         rc, out = mf("ms", "review", "t1", "M1", "--session", "w0")
         self.assertEqual(rc, 3, out)  # the card skeleton still has placeholders
         self.assertIn("占位符", out)
@@ -110,6 +110,8 @@ class MilestoneTest(MilestoneBase):
         doc1 = git("show", f"{c1}:docs/ENTRY.md", cwd=self.repo)
         self.assertIn("设计说明", doc1)
         self.assertIn("基线来源（mf 记录）", doc1)  # user rule 11-22: where the baseline numbers come from
+        self.assertIn("最近的性能里程碑 M1：相对冻结基线 1.", doc1)  # the conclusion first, the per-case table folded
+        self.assertIn("<details><summary>逐 case（3 个，mf 生成）</summary>", doc1)
         for f in ("STATUS.md", "dashboard.html"):
             self.assertIn("路线图", (tdir / f).read_text())
 
@@ -442,8 +444,7 @@ class MilestoneTest(MilestoneBase):
         c = self.st("b1").milestones["M0"]["close"]["commit"]
         self.assertIn("Review: rv", git("log", "-1", "--format=%B", c, cwd=self.repo))
         self.assertIn("tests/test_newop.py", git("show", "--stat", "--format=", c, cwd=self.repo))
-        row = next(x for x in git("show", f"{c}:docs/ENTRY.md", cwd=self.repo).splitlines() if x.startswith("| M0 |"))
-        self.assertIn("| ✓ | ✓ |", row)  # tests (re-run on the final commit) and review
+        self.assertIn("- M0 ✅ 本提交 · 功能 · newop", git("show", f"{c}:docs/ENTRY.md", cwd=self.repo))
         # changing an existing protected test needs a stated reason (user rule 11-22), not the user's approval
         (bwt / "newop.py").write_text("def newop(x):\n    return 2 * x\n")
         self.ok("ms", "plan", "b1", "M1", "--type", "feature", "--title", "newop v2")
@@ -774,7 +775,8 @@ class SettingsAndRenderingTest(Base):
         self.assertEqual(ms.entry_url(st, "M3"), "https://github.com/o/r/blob/c2-M3/docs/%E8%AE%BE%E8%AE%A1.md")
         card = ("### M1 · 标题\n**做了什么**: 见 [代码](src/a.py#L3)\n```diff\n- a\n+ b\n```\n"
                 "| a | b |\n|---|---|\n| 1 | 2 |\n- x\n  - y\n<script>alert(1)</script> [j](javascript:alert(1))\n"
-                "> - [`fused_moe`](moe.py#L66) 与 __init__.py，[`x`](javascript:1)\n")
+                "> - [`fused_moe`](moe.py#L66) 与 __init__.py，[`x`](javascript:1)\n"
+                "<details><summary>逐 case（2 个）</summary>\n\n| c | v |\n|---|---|\n| a | 1 |\n\n</details>\n<details x=1>\n")
         text = render.md_text(card)
         self.assertNotIn("**", text)
         self.assertIn("做了什么: 见 代码（src/a.py#L3）", text)
@@ -788,6 +790,9 @@ class SettingsAndRenderingTest(Base):
         self.assertNotIn("\x00", page)
         self.assertIn("__init__.py", text)
         self.assertNotIn("<script>", page)
+        self.assertIn("<details><summary>逐 case（2 个）</summary>\n<table>", page)  # a fold is the one HTML let through
+        self.assertIn("</details>", page)
+        self.assertIn("&lt;details x=1&gt;", page)
         self.assertNotIn("href='javascript", page)
 
     def test_serve_renders_markdown(self):
@@ -842,19 +847,26 @@ class CliAndDirectionTest(Base):
         self.assertIn("verify_shopping", {a["code"] for a in guard.alerts(self.st())})
 
     def test_quality_signal_is_the_entry_document_budget(self):
+        """User request 11-22: the entry document is a design document a tech lead reads in 10 minutes: within its line
+        budget, one thing per line, no process traces. mf's blocks and the template's comment hints are not read."""
         tdir = self.ready()
         self.ok("set", "t1", "doc.entry=docs/ENTRY.md", "doc.max_lines=5")
         append_event(tdir, "ms.plan", "title M1", id="M1", type="perf", expect=1.1, commitment="committed")
         doc = tdir / "wt" / "_ms" / "docs" / "ENTRY.md"
         doc.parent.mkdir(parents=True)
-        doc.write_text("# x\n<!-- mf:perf -->\n" + "generated\n" * 50 + "<!-- /mf:perf -->\nprose\n")
+        doc.write_text("# x\n<!-- mf:perf -->\n" + "generated\n" * 50 + "<!-- /mf:perf -->\n"
+                       "<!-- a hint\n  for the writer -->\n[link](" + "y" * 200 + ") prose\n")
 
-        def level():
-            return {a["code"]: a["level"] for a in guard.alerts(self.st())}.get("ms_quality")
+        def quality():
+            return next(d for d in guard.direction(self.st()) if d["code"] == "quality")
 
-        self.assertIsNone(level())  # 4 lines without mf's blocks: within the budget
-        doc.write_text(doc.read_text() + "more\n" * 3)
-        self.assertEqual(level(), "warn")
+        self.assertEqual(quality()["level"], "ok", quality())  # 2 lines a reader sees; a link target is not read
+        doc.write_text(doc.read_text() + "more\n" * 3 + "x" * 130 + "\nsee runs/abc/out.log and V3\n")
+        q = quality()
+        self.assertEqual(q["level"], "warn")
+        for needle in ("7 行（不含 mf 生成块）> 预算 5", "1 行超过 120 字（最长 130", "runs/ 日志路径 ×1", "（A7、V3） ×1"):
+            self.assertIn(needle, q["msg"])
+        self.assertEqual({a["code"]: a["level"] for a in guard.alerts(self.st())}.get("ms_quality"), "warn")
 
     def test_promise_prediction_and_plateau_signals(self):
         tdir = self.ready()

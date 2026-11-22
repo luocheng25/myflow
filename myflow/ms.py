@@ -34,7 +34,13 @@ MS_RE = re.compile(r"M\d{1,3}[a-z]?$")
 TYPES = ("feature", "perf", "analysis", "maint")
 TYPE_ZH = {"feature": "功能", "perf": "性能", "analysis": "分析", "maint": "维护"}
 ROLE_ZH = {"review": "复核", "tests": "测试负责人", "writer": "文档作者", "verifier": "冷读验证者"}  # the last three: history only
-DOC_MAX_LINES = 250  # entry document budget without mf's generated blocks (user request 11-22: easy, not long)
+# the entry document is a design document a tech lead reads in 10 minutes (user request 11-22): its budget without
+# mf's generated blocks, one thing per line (link targets not counted), and no process traces in it
+DOC_MAX_LINES = 150
+DOC_MAX_LINE_CHARS = 120
+DOC_TRACES = (("runs/ 日志路径", r"\bruns/"), ("notes/ 笔记路径", r"\bnotes/"),
+              ("尝试 / 复核编号（A7、V3）", r"(?<![A-Za-z0-9_/.#-])[AV]\d{1,3}(?![A-Za-z0-9_.])"),
+              ("history 文档", r"\bhistory\.md\b"), ("“用户 MM-DD”式的过程记录", r"用户 ?\d{1,2}-\d{1,2}"))
 DOC_EXT = (".md", ".rst")  # only formats that never execute; .txt can be requirements.txt / CMakeLists.txt
 CARD_MAX_LINES = 60
 PLACEHOLDER = "«"  # card skeleton placeholders; the writer must replace all of them
@@ -79,9 +85,35 @@ def doc_budget(st: State) -> int:
     return int(st.task["doc"].get("max_lines") or DOC_MAX_LINES)
 
 
+def _reader_text(text: str) -> str:
+    """An entry document as its reader sees it: without mf's generated blocks and without HTML comments (the template's
+    writing hints are comments; GitHub does not show them)."""
+    text = GEN_BLOCK.sub(r"\1\3", text)
+    comment = r"<!--(?:(?!-->).)*-->"  # never runs past its own end
+    text = re.sub(r"^[ \t]*(?:%s[ \t]*)+(?:\n|$)" % comment, "", text, flags=re.S | re.M)
+    return re.sub(comment, "", text, flags=re.S)
+
+
 def doc_core_lines(text: str) -> int:
     """Lines of an entry document that people have to read, without mf's generated blocks."""
-    return len(GEN_BLOCK.sub(r"\1\3", text).splitlines())
+    return len(_reader_text(text).splitlines())
+
+
+def doc_problems(st: State, text: str) -> list:
+    """What makes the entry document longer or harder to read than a design document should be: over the line budget,
+    lines that say more than one thing, and process traces (they belong in commit messages and mf's report)."""
+    core = _reader_text(text)
+    lines, cap = core.splitlines(), doc_budget(st)
+    width = int(st.task["doc"].get("max_line_chars") or DOC_MAX_LINE_CHARS)
+    out = [f"{len(lines)} 行（不含 mf 生成块）> 预算 {cap}"] if len(lines) > cap else []
+    seen = [len(re.sub(r"\]\([^)]*\)", "]", ln)) for ln in lines]  # a link's target is not read
+    long_ = [n for n in seen if n > width]
+    if long_:
+        out.append(f"{len(long_)} 行超过 {width} 字（最长 {max(long_)}；一行只说一件事，链接地址不计）")
+    traces = [f"{label} ×{n}" for label, pat in DOC_TRACES for n in [len(re.findall(pat, core))] if n]
+    if traces:
+        out.append("过程痕迹：" + "、".join(traces) + "（放提交信息或 mf 报告，设计文档只写当前设计）")
+    return out
 
 
 def _bench_ref(path: str, pins: dict) -> bool:
@@ -499,7 +531,8 @@ def role_prompts(st: State, m: dict) -> str:
     wt, pins = prep["wt"], prep["pins"]
     d = ms_dir(st, mid)
     entry = st.task["doc"].get("entry")
-    entry_p = f"{wt}/{entry}（不含 mf 生成块 ≤{doc_budget(st)} 行）" if entry else "（未设置 doc.entry：只写卡片）"
+    entry_p = (f"{wt}/{entry}（给 tech lead 的设计文档，标准见 skill myflow-review：不含 mf 生成块 ≤{doc_budget(st)} 行）"
+               if entry else "（未设置 doc.entry：只写卡片）")
     tp = (", ".join(pins["tests"]) + "（且在 scope.protect 内、不是 bench）") if pins["tests"] else "（未设置 tests.paths：不能改用例）"
     dp = (", ".join(pins["doc"]) + "（只限 .md / .rst）") if pins["doc"] else "（未设置 doc.paths：只写卡片）"
     mf, tid = cli.MF, st.id
@@ -513,8 +546,9 @@ def role_prompts(st: State, m: dict) -> str:
         f"收尾 {mid} 已就绪：集成 worktree {wt}（候选 {prep['candidate'][:10]}，运行时树 {prep['runtime_tree']}）。",
         "派 1 个独立的复核子 agent（不是实现者的会话），只做一次；下一个里程碑的实现者现在就可以开工（流水线：下一个 prep 时 mf 自动合并本次收尾）：",
         f"prompt：使用 skill myflow-review。任务 {tid} 里程碑 {mid}：对照改动（{diff}）、{wt} 里的代码与用例、"
-        f"实现者报告 {report}、`{mf} status {tid} {mid}` 的数据（计划卡、验收数字），在入口文档 {entry_p} 写好 / 核对本里程碑一节"
-        "（改了什么、为什么、与计划或上游的差异、已知问题）、基线与对照的来源、测试覆盖表（按基本功能 / 性能 / 其他三类写覆盖了什么，其他类写明前两类为何覆盖不了，及未覆盖 / 跳过清单），"
+        f"实现者报告 {report}、`{mf} status {tid} {mid}` 的数据（计划卡、验收数字），更新入口文档 {entry_p}"
+        "（只改受影响的节，写成现在的设计；本里程碑改了什么、为什么、与计划的差异写在卡片里），核对基线与对照的来源、"
+        "测试覆盖表（按基本功能 / 性能 / 其他三类写覆盖了什么，其他类写明前两类为何覆盖不了，及未覆盖 / 跳过清单），"
         f"按测试原则补上本里程碑新增或改动的逻辑缺的用例，把卡片 {d / 'card.md'} 的 «…» 换成实际内容；能改 {dp}，以及 {tp}。"
         "发现与代码不符直接改，不打回。只跑你新增 / 改动的用例文件（完整功能用例由 mf 收尾时在最终提交上跑），然后运行："
         f"{mf} ms review {tid} {mid} --session <你的会话名> --card {d / 'card.md'} -m \"<一句话>\"（改动或删除了已有用例时加 --tests-why）；"
@@ -871,9 +905,8 @@ def cmd_review(a):
     n = len(text.strip().splitlines())
     if n > CARD_MAX_LINES:
         print(f"[mf] ⚠ 卡片 {n} 行 > {CARD_MAX_LINES}：卡片要一屏读完，细节放入口文档或深度参考", file=sys.stderr)
-    if entry_text and doc_core_lines(entry_text) > doc_budget(st):
-        print(f"[mf] ⚠ 入口文档 {doc_core_lines(entry_text)} 行（不含 mf 生成块）> 预算 {doc_budget(st)}："
-              "把旧里程碑小节收成一行摘要 + 提交链接，细节移到深度参考文件", file=sys.stderr)
+    for p in (doc_problems(st, entry_text) if entry_text else []):
+        print(f"[mf] ⚠ 入口文档：{p}。按设计文档标准精简（skill myflow-review）", file=sys.stderr)
     data.update(card=str(d / "card.md"), card_hash=file_hash(d / "card.md"))
     append_event(tdir, "ms.role", (a.summary or "")[:300], by="agent", **data)
     print(f"{a.id} 复核已记录（会话 {a.session}；改动 {len(changed)} 个文件）")

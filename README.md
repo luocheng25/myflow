@@ -5,7 +5,7 @@
 
 你只需要看三样东西：
 1. **GitHub 上的里程碑提交**：一个里程碑 = 一个提交 + tag。提交信息写做了什么、为什么、与计划的差异、覆盖、性能、下一步，末尾链接到该 tag 下的入口文档。
-2. **入口文档**（一个文件）：原理与设计、接口、测试覆盖表、性能与基线 / 对照的来源。每个里程碑由一个独立的复核子 agent 核对一次。
+2. **入口文档**：给 tech lead 的设计文档，10 分钟读完能知道做什么、整体怎么做、为什么这样做、做到什么程度、风险在哪。只写当前设计（过程在提交信息里），正文 ≤150 行；每个里程碑由一个独立的复核子 agent 更新一次。
 3. **测试覆盖表**：按三类列出测了什么——基本功能测试（少而快，每次改动先跑）、性能测试、其他覆盖测试（只测前两类覆盖不了的，写明原因）；不看代码也能判断可靠性。
 
 ## 安装
@@ -54,7 +54,7 @@ examples/toy/demo.sh                          # 可选：约 10 秒的 CPU 演�
 | 想知道 | 看哪里 |
 |---|---|
 | 完成了哪些里程碑，各改了什么、为什么 | GitHub 分支上的里程碑提交（tag `<任务>-M<k>`）；提交信息末尾是该 tag 下渲染好的入口文档链接 |
-| 原理、接口、覆盖了哪些情况、基线从哪来 | 入口文档（试点：`src/pyhip/ops/moe/flydsl/a8w4_ptpc/README.md`） |
+| 整体设计、关键取舍、覆盖了哪些情况、基线从哪来 | 入口文档（试点：`src/pyhip/ops/moe/flydsl/a8w4_ptpc/README.md`） |
 | 现在在做什么、有没有跑偏 | `mf status <任务>`：路线图（✅ 已推送 · 🔄 收尾中 · ⏳ 承诺）、方向检查（承诺兑现、预测偏差、规模、收益曲线…）、提醒 |
 | 某个里程碑 / 某次尝试的细节 | `mf status <任务> M3` · `mf status <任务> A7` |
 | 网页 | `mf serve`：看板、渲染 Markdown、直接批准问题、给 agent 留言（VS Code Remote 需在 Ports 面板转发端口） |
@@ -154,7 +154,7 @@ mf 挂起的问题，agent 30 分钟内没有转达给你，会升为严重预�
 "budget":   {"max_attempts": 40, "max_hours": 24, "max_no_improve": 10, "max_fail_streak": 4, "heartbeat_min": 30, "report_min": 60, "spin_min": 120, "timeout_s": 1800}
 "verify":   {"pairs": 4}   "gates": {"spec": "ask", "plan": "ask"}   "survey": {"repos": ["/opt/aiter", "/opt/lc/FlyDSL"]}
 "git":      {"url": "https://github.com/<you>/<repo>.git", "branch": "<you>/<task>", "push": "first-ask", "lang": "en"}   // 仓库是 pyhip 时 mf new 自动设为 zh
-"doc":      {"entry": "src/pyhip/ops/<op>/README.md", "paths": ["src/pyhip/ops/<op>/**/*.md"], "lang": "zh", "max_lines": 250}
+"doc":      {"entry": "src/pyhip/ops/<op>/README.md", "paths": ["src/pyhip/ops/<op>/**/*.md"], "lang": "zh", "max_lines": 150, "max_line_chars": 120}
 "tests":    {"paths": ["tests/ops/<op>/**"]}   "milestone": {"max_lines": 800, "max_hours": 24}
 ```
 完整示例（aiter + FlyDSL）：`templates/task.example.json`。命令中的模板变量：`{wt} {lane} {lane_dir} {run} {gpu} {seed} {task_dir} {repo} {base}`。

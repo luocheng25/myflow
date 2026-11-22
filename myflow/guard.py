@@ -352,12 +352,12 @@ def direction(st, now=None) -> list:
     doc = st.dir / "wt" / "_ms" / entry if entry else None
     if doc and doc.is_file():
         from myflow import ms
-        n, cap = ms.doc_core_lines(doc.read_text(encoding="utf-8", errors="replace")), ms.doc_budget(st)
-        if n > cap:
-            sig("quality", "质量", "warn", f"入口文档 {n} 行（不含 mf 生成块）> 预算 {cap}：旧里程碑小节收成一行摘要 + 提交链接，"
-                                       "细节移到深度参考")
+        text = doc.read_text(encoding="utf-8", errors="replace")
+        probs = ms.doc_problems(st, text)
+        if probs:
+            sig("quality", "质量", "warn", "入口文档：" + "；".join(probs))
         else:
-            sig("quality", "质量", "ok", f"入口文档 {n}/{cap} 行")
+            sig("quality", "质量", "ok", f"入口文档 {ms.doc_core_lines(text)}/{ms.doc_budget(st)} 行")
     else:
         sig("quality", "质量", "ok")
 

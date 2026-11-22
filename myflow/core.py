@@ -69,7 +69,7 @@ DEFAULTS = {
     "git": {"url": "", "branch": "", "push": "first-ask", "lang": "en", "sign": False},
     "milestone": {"max_lines": 800, "max_hours": 24},
     # max_lines: entry document budget without mf's generated blocks (user request 11-22: easy to read, not long)
-    "doc": {"entry": "", "paths": [], "lang": "zh", "max_lines": 250},
+    "doc": {"entry": "", "paths": [], "lang": "zh", "max_lines": 150, "max_line_chars": 120},
     "tests": {"paths": []},
 }
 MS_TERMINAL = ("done", "report", "stop", "await-user")

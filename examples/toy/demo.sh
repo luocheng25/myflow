@@ -67,12 +67,25 @@ python3 - "$int/docs/ENTRY.md" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
-s = s.replace("> 手写 3 行（文档作者）：这是什么 · 为什么这样设计 · 现在最大的风险。",
-              "> toy kernel：逐元素 2·x。M1 用 unroll x4 + 向量 load + 软件流水把三个 case 提到约 1.44×；\n"
-              "> 设计取舍：只改 kernel.py，数值逐位不变；最大风险：large case 已受带宽限制，离 1.5× 还差约 4%。")
-s = s.replace("|---|---|---|---|\n\ndispatch", "|---|---|---|---|\n| `kernel.run(xs)` | list → list | 无 | 逐元素 2·x |\n\ndispatch")
-s = s.replace("for t in range(steps):      # 阶段 A：…    阶段 B：…\n    ...",
-              "for i in range(0, n, 4):    # 阶段 A：向量 load x[i:i+4]    阶段 B：上一组的 2·x 写回\n    ...")
+fill = {  # the design document a tech lead reads (template sections; the comment hints stay invisible)
+    "## 1. 目标与范围\n": "## 1. 目标与范围\n- toy kernel `kernel.run(xs)`：逐元素 2·x。目标：三个 case 的 geomean 提速 ≥1.5×，数值逐位不变。\n"
+                         "- 验收：对冻结基线同卡 ABBA；精度参考是逐元素 2·x 本身。不做：改接口、改数值顺序。\n",
+    "```text\n```": "```text\nxs ──▶ kernel.run ──▶ 每 4 个元素一组：向量 load → 2·x → 写回（与下一组的 load 重叠）\n```",
+    "| 输入范围 | 路径 | 为什么 |\n|---|---|---|\n": "| 输入范围 | 路径 | 为什么 |\n|---|---|---|\n"
+                                                "| 全部长度 | 向量化 + 软件流水 | 访存指令减为 1/4，load 与计算重叠 |\n",
+    "| 决策 | 备选 | 为什么 | 代价 / 限制 |\n|---|---|---|---|\n": "| 决策 | 备选 | 为什么 | 代价 / 限制 |\n|---|---|---|---|\n"
+        "| 向量化（unroll x4） | 分块（tile） | 分块四次尝试只到 1.04–1.06× | large case 仍受带宽限制 |\n",
+    "## 4. 性能与精度\n": "## 4. 性能与精度\n- 三个 case 约 1.44×（目标 1.5×，差约 4%）；数值与基线逐位相同。\n",
+    "| 覆盖什么 | 用例 | 结果 |\n|---|---|---|\n": "| 覆盖什么 | 用例 | 结果 |\n|---|---|---|\n"
+                                              "| 主路径：`run([1, 2, 3]) == [2, 4, 6]` | test_kernel.py | ✓ |\n",
+    "| 覆盖什么（分档 / 形状） | case | 结果 |\n|---|---|---|\n": "| 覆盖什么（分档 / 形状） | case | 结果 |\n|---|---|---|\n"
+                                                         "| 三个规模 | small / medium / large | ✓ ≈1.44× |\n",
+    "## 6. 风险与待定\n": "## 6. 风险与待定\n- large case 受带宽限制 → 离目标差约 4% → M2 用 prefetch 隐藏访存延迟。\n",
+    "- 代码入口：": "- 代码入口：[kernel.py](../kernel.py)",
+}
+for old, new in fill.items():
+    s = s.replace(old, new, 1)
+s = s.replace("N 例，约 M 秒", "1 例，<1 秒").replace("N 个 case", "3 个 case").replace("；`commands.verify_extra`，N 例", "；本任务没有")
 open(p, "w", encoding="utf-8").write(s)
 PY
 cat > "$ms/card.md" <<'MD'
@@ -88,7 +101,7 @@ cat > "$ms/card.md" <<'MD'
 **Perf (by mf)**: 见提交信息 Perf 行（对冻结基线 ≈1.44×）。
 **Next**: M2 prefetch，预期再 +5%（large case 带宽受限，需隐藏延迟）。
 MD
-q ms review demo M1 --session demo-review --card "$ms/card.md" -m "入口文档 §0、§3.2、§3.5 与卡片；用例无缺失"
+q ms review demo M1 --session demo-review --card "$ms/card.md" -m "入口文档按设计文档标准写全 7 节；卡片；用例无缺失"
 q ms close demo M1 --next M2   # pushed right away: the target was approved with the requirements
 q brief demo "M1 已推送：vec 复核 ≈1.44×；boost 的收益被复核识破（本地文件）；tile 停滞。下一步 M2 prefetch"
 

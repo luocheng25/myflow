@@ -39,6 +39,8 @@ def esc(s) -> str:
 # Cards, notes and entry documents are Markdown. Commit messages are shown as plain text by GitHub (md_text);
 # mf serve / dashboards render them (md_html). Only the common subset is supported; HTML in the source is escaped.
 
+_MD_DETAILS = re.compile(r"^\s*(<details>)?\s*(?:<summary>(.*?)</summary>)?\s*$")
+_MD_DETAILS_END = re.compile(r"^\s*</details>\s*$")
 _MD_FENCE = re.compile(r"^\s*(```|~~~)")
 _MD_LIST = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
 _MD_HEAD = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
@@ -113,6 +115,18 @@ def md_html(text: str) -> str:
             continue
         if not ln.strip():
             flush()
+            i += 1
+            continue
+        d = _MD_DETAILS.match(ln)
+        if d and (d.group(1) or d.group(2) is not None):  # the only HTML let through: a fold on its own lines
+            flush()
+            out.append(("<details>" if d.group(1) else "") + (f"<summary>{_md_inline(d.group(2))}</summary>"
+                                                              if d.group(2) is not None else ""))
+            i += 1
+            continue
+        if _MD_DETAILS_END.match(ln):
+            flush()
+            out.append("</details>")
             i += 1
             continue
         h = _MD_HEAD.match(ln)
@@ -393,6 +407,35 @@ def roadmap_md(st: State, current=None, nxt=None) -> str:
     return "\n".join(rows)
 
 
+def roadmap_lines(st: State, current=None, nxt=None) -> str:
+    """The milestone list of the entry document (user request 11-22: a design document, not a process log): one line
+    per milestone; the commit holds what changed and why."""
+    web = github_web(st.task["git"].get("url"))
+    rows = []
+    for m in st.milestones.values():
+        if current and m["id"] == current.get("id"):
+            m = current  # rendered at prep: show the milestone this commit will close
+        c = _ms_cells(st, m, current)
+        title = " ".join(c["title"].split())
+        parts = [f"{c['id']} {c['status']}", c["type"], title if len(title) <= 40 else title[:39] + "…"]
+        if (m.get("prep") or {}).get("inc"):
+            parts.append(c["inc"])
+        elif m.get("expect"):
+            parts.append(f"预期 {m['expect']:g}×")
+        if web and c["tag"] and m.get("pushed"):
+            parts.append(f"[提交]({web}/commit/{c['commit']})")
+        elif c["tag"]:
+            parts.append(f"tag `{c['tag']}`")
+        rows.append("- " + " · ".join(parts))
+    if nxt:  # rendered at close: what this commit promises
+        rows += ["", f"下一步（本提交的承诺）：{next_plan(st, nxt)}"]
+    else:
+        label = next_label(st, exclude=(current or {}).get("id"))
+        if label:
+            rows += ["", f"下一步（{'计划' if current else '上次推送的承诺'}）：{label}"]
+    return "\n".join(rows)
+
+
 def roadmap_text(st: State) -> str:
     if not st.milestones:
         return f"{st.id}: 还没有里程碑（mf ms plan {st.id} M1 --title ...）"
@@ -458,16 +501,21 @@ def entry_blocks(st: State, current=None, nxt=None) -> dict:
         cum = _verify_n(st, latest["prep"]["cum"]["v"]) or {}
         inc_s = latest["prep"].get("inc") or {}
         inc = _verify_n(st, inc_s.get("v")) if inc_s.get("v") != latest["prep"]["cum"]["v"] else None
-        perf = [f"{latest['id']} 的复核（V{cum.get('n')}：同卡 ABBA {cum.get('pairs')} 对，{gpu_txt(cum.get('gpu'))}，"
-                f"噪声 {pct(cum.get('noise'))}，冻结基线 `{str((st.freeze or {}).get('base', ''))[:10]}`）", "",
+        vs = f"，相对 {inc_s.get('against_ms') or '上一里程碑'} {fx(inc_s.get('speedup'))}" if inc else ""
+        cases = sorted((cum.get("per_case") or {}).items())
+        # the per-case numbers stay verifiable but folded: the design document states the conclusion per tier
+        perf = [f"最近的性能里程碑 {latest['id']}：相对冻结基线 {fx(cum.get('speedup'))}{vs}（mf 复核 V{cum.get('n')}："
+                f"同卡 ABBA {cum.get('pairs')} 对，{gpu_txt(cum.get('gpu'))}，噪声 {pct(cum.get('noise'))}）。", "",
+                f"<details><summary>逐 case（{len(cases)} 个，mf 生成）</summary>", "",
                 "| case | 基线 | 当前 | 累计加速 | 增量加速 |", "|---|---|---|---|---|"]
-        for c, d in sorted((cum.get("per_case") or {}).items()):
+        for c, d in cases:
             ic = ((inc or {}).get("per_case") or {}).get(c, {}).get("speedup")
             perf.append(f"| {c} | {_num(d.get('a'))} | {_num(d.get('b'))} | {fx(d.get('speedup'))} | {fx(ic) if inc else '—'} |")
+        perf += ["", "</details>"]
     src = baseline_source(st)
     if src:
         perf = [src, ""] + perf
-    return {"summary": summary_txt, "roadmap": roadmap_md(st, current, nxt), "perf": "\n".join(perf)}
+    return {"summary": summary_txt, "roadmap": roadmap_lines(st, current, nxt), "perf": "\n".join(perf)}
 
 
 def baseline_source(st: State) -> str:
@@ -482,7 +530,7 @@ def baseline_source(st: State) -> str:
     bench = bench if len(bench) <= 160 else bench[:157] + "…"
     return (f"基线来源（mf 记录）：{hm(fz.get('t'))} 冻结于提交 `{base[:10]}`{who}，bench 跑 {fz.get('repeats') or '—'} 次取中位数，"
             f"{gpu_txt(fz.get('gpu'))}，噪声 {pct(fz.get('noise'))}；bench 命令 `{bench}`。"
-            "对照实现与精度参考的来源见“基线与对照的来源”一节。")
+            "对照实现与精度参考的来源见本节手写部分。")
 
 
 def _num(x) -> str:

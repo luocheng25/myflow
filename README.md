@@ -169,4 +169,4 @@ examples/toy           CPU 演示            examples/torch-rmsnorm   真实 GPU
 docs/DESIGN.md         方案与取舍          tests/             自测（mf selftest）
 ~/.myflow/             registry.json · STATUS.md · index.html · locks/ · tasks/<id>/{task.json,SPEC.md,events.jsonl,STATUS.md,dashboard.html,runs/,lanes/,wt/,milestones/,notes/,tools/}
 ```
-数据位置用 `mf config` 持久设置（`~/.config/myflow/config.json`，`MYFLOW_CONFIG` 可换位置），同名环境变量优先：`home` / `MYFLOW_HOME`（任务登记、总览，默认 `~/.myflow`；不要放 /tmp——部分 agent 沙箱禁止写 /tmp）、`tasks_dir` / `MYFLOW_TASKS_DIR`（新任务的数据目录，默认 `<home>/tasks`；单个任务也可 `mf new --dir`）、`lock_dir` / `MYFLOW_LOCK_DIR`（多用户共享 GPU 锁时设为所有人可写的公共目录）。其他环境变量：`MYFLOW_KB`（另一个经验库）、`MYFLOW_PYTHON`。
+数据位置用 `mf config` 持久设置（`~/.config/myflow/config.json`，`MYFLOW_CONFIG` 可换位置），同名环境变量优先：`home` / `MYFLOW_HOME`（任务登记、总览，默认 `~/.myflow`；不要放 /tmp——部分 agent 沙箱禁止写 /tmp）、`tasks_dir` / `MYFLOW_TASKS_DIR`（新任务的数据目录，默认 `<home>/tasks`；单个任务也可 `mf new --dir`）、`lock_dir` / `MYFLOW_LOCK_DIR`（多用户共享 GPU 锁时设为所有人可写的公共目录）、`kb` / `MYFLOW_KB`（经验卡目录，默认 myflow 自带的 knowledge/）。`mf config home=<新目录> --fresh` 开一个空的新环境（不登记原有任务），例如从零重做一个任务。其他环境变量：`MYFLOW_PYTHON`。

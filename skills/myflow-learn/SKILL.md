@@ -1,7 +1,7 @@
 ---
 name: myflow-learn
 description: >-
-  把完成的 myflow 任务中可复用的经验沉淀成短小的经验卡（/opt/myflow/knowledge/cards），并保持生成的索引最新；
+  把完成的 myflow 任务中可复用的经验沉淀成短小的经验卡（`mf config` 所示 kb 目录下的 cards/），并保持生成的索引最新；
   调研前查阅已有经验。Use at the end of a myflow task (report phase), when the user says 沉淀经验 / 总结教训 /
   记录这个坑 / update the knowledge base, or before a survey to look up prior lessons for a kernel class.
 ---
@@ -23,5 +23,5 @@ description: >-
 4. `mf kb check`（检查卡片并重建 `INDEX.md`；它是生成文件，不要手改）。
 
 ## 读
-- 调研前先读 `/opt/myflow/knowledge/INDEX.md`，按语义挑卡片再打开。
+- 调研前先 `mf kb search <词>` 或读 kb 目录下的 INDEX.md，按语义挑卡片再打开。
 - 卡片是先验，不是结论：与本机测量冲突时以测量为准，并回头更新卡片。

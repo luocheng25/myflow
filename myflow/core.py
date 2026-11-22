@@ -117,7 +117,7 @@ def config_path() -> Path:
 
 
 # setting -> environment variable that overrides it; the config file comes next, then the default
-CONFIG_KEYS = {"home": "MYFLOW_HOME", "tasks_dir": "MYFLOW_TASKS_DIR", "lock_dir": "MYFLOW_LOCK_DIR"}
+CONFIG_KEYS = {"home": "MYFLOW_HOME", "tasks_dir": "MYFLOW_TASKS_DIR", "lock_dir": "MYFLOW_LOCK_DIR", "kb": "MYFLOW_KB"}
 
 
 def load_config() -> dict:
@@ -137,7 +137,7 @@ def setting(key: str) -> tuple:
     if cfg:
         return Path(cfg).expanduser(), f"配置文件 {config_path()}"
     default = {"home": lambda: Path.home() / ".myflow", "tasks_dir": lambda: home() / "tasks",
-               "lock_dir": lambda: home() / "locks"}[key]()
+               "lock_dir": lambda: home() / "locks", "kb": lambda: PKG_ROOT / "knowledge"}[key]()
     return default, "默认"
 
 

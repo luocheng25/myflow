@@ -37,7 +37,7 @@ class Base(unittest.TestCase):
         self._env = dict(os.environ)
         os.environ["MYFLOW_HOME"] = str(self.tmp / "home")
         os.environ["MYFLOW_CONFIG"] = str(self.tmp / "config.json")  # never the user's real config
-        for k in ("MYFLOW_TASKS_DIR", "MYFLOW_LOCK_DIR"):
+        for k in ("MYFLOW_TASKS_DIR", "MYFLOW_LOCK_DIR", "MYFLOW_KB"):
             os.environ.pop(k, None)
         os.environ["MYFLOW_SMI_CMD"] = "echo '{}'"
         self.repo = self.tmp / "repo"

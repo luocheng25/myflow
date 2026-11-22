@@ -765,7 +765,13 @@ class SettingsAndRenderingTest(Base):
         self.assertIn("登记了原有的 1 个任务", self.ok("config", f"home={h2}"))
         self.assertTrue((h2 / "registry.json").is_file())
         self.assertEqual(task_dir_of("c1"), other / "c1")
-        self.ok("config", "--unset", "home", "--unset", "tasks_dir")
+        # --fresh: an isolated new environment (e.g. redoing a task from scratch): nothing carried over
+        h3, kb = self.tmp / "home3", self.tmp / "kb"
+        self.assertIn("不登记原有任务", self.ok("config", f"home={h3}", f"kb={kb}", "--fresh"))
+        self.assertIn("0 task(s)", self.ok("status"))
+        self.ok("kb", "new", "fresh-card", "--kind", "pitfall")
+        self.assertTrue((kb / "cards" / "fresh-card.md").is_file())  # cards go to the configured kb, not myflow's own
+        self.ok("config", "--unset", "home", "--unset", "tasks_dir", "--unset", "kb")
         os.environ["MYFLOW_HOME"] = str(h1)
 
     def test_entry_link_and_markdown_rendering(self):

@@ -1291,7 +1291,10 @@ def cmd_config(a):
         cfg = {k: v for k, v in cfg.items() if v}
         atomic_write(config_path(), json.dumps(cfg, indent=1, ensure_ascii=False) + "\n")
         old_home, new_home = before["home"], setting("home")[0]
-        if new_home != old_home:  # the task list moves with home; task directories stay where they are
+        if new_home != old_home and a.fresh:  # an isolated environment, e.g. redoing a task from scratch
+            print(f"home 改到 {new_home}：不登记原有任务（--fresh）；原来的任务仍在 {old_home}，"
+                  f"用 MYFLOW_HOME={old_home} mf status 查看")
+        elif new_home != old_home:  # the task list moves with home; task directories stay where they are
             old = json.loads((old_home / "registry.json").read_text()) if (old_home / "registry.json").is_file() else {}
             moved = [tid for tid in old if tid not in registry()]
             for tid in moved:
@@ -1301,7 +1304,7 @@ def cmd_config(a):
         value, source = setting(key)
         print(f"{key:<10} {value}  （{source}；环境变量 {env} 优先）")
     print(f"配置文件：{config_path()}（环境变量 MYFLOW_CONFIG 可指定别的位置）")
-    print("tasks_dir 只影响之后 mf new 的任务；单个任务也可以 mf new <id> --dir <目录>")
+    print("tasks_dir 只影响之后 mf new 的任务；单个任务也可以 mf new <id> --dir <目录>；kb 是经验卡目录（cards/ + INDEX.md）")
 
 
 def cmd_install_skills(a):
@@ -1557,9 +1560,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("args", nargs="*")
     s.add_argument("--kind", default="technique")
 
-    s = cmd("config", cmd_config, "show / set data locations: home (registry, overview), tasks_dir (new tasks), lock_dir")
+    s = cmd("config", cmd_config, "show / set data locations: home (registry, overview), tasks_dir (new tasks), lock_dir, "
+                                    "kb (experience cards)")
     s.add_argument("items", nargs="*", metavar="key=value")
     s.add_argument("--unset", action="append", metavar="key")
+    s.add_argument("--fresh", action="store_true", help="a new home starts empty: earlier tasks are not registered there")
 
     s = cmd("install-skills", cmd_install_skills, "symlink myflow skills into agent skill folders")
     s.add_argument("--user", action="store_true", help="~/.copilot/skills and ~/.claude/skills")

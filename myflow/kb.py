@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
-from myflow.core import PKG_ROOT, MfError, atomic_write
+from myflow.core import PKG_ROOT, MfError, atomic_write, setting
 
 KINDS = ("technique", "pitfall", "dead-end", "measurement")
 REQUIRED = ("name", "kind", "summary", "applies", "confidence", "evidence")
@@ -15,7 +14,8 @@ _ABS = re.compile(r"\b\d+(\.\d+)?\s?(us|µs|ms|TB/s|GB/s|TFLOPS|TF)\b")
 
 
 def kb_dir() -> Path:
-    return Path(os.environ.get("MYFLOW_KB") or (PKG_ROOT / "knowledge"))
+    """Where the experience cards live: MYFLOW_KB > `mf config kb=…` > the cards shipped with myflow."""
+    return setting("kb")[0]
 
 
 def parse(path: Path):

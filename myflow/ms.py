@@ -499,8 +499,9 @@ def commit_message(st: State, m: dict, nxt: list) -> str:
     lines = [f"[{m['id']}] {m.get('title', '')}"[:100], "", card, ""]
     url = entry_url(st, m["id"])
     if url:
-        lines += [f"入口文档（渲染版：做了什么、测试覆盖、性能与基线来源）：{url}" if zh else
-                  f"Entry document (rendered: what changed, test coverage, performance and baseline sources): {url}", ""]
+        lines += [f"入口文档（渲染版的设计说明：总体设计、关键决策、性能与精度、测试覆盖）：{url}" if zh else
+                  f"Entry document (rendered design document: design, key decisions, performance and accuracy, "
+                  f"test coverage): {url}", ""]
     tests = max((r for r in m["roles"].values() if r and r.get("tests_files")), key=lambda r: r["t"], default=None)
     if tests:
         lines.append(f"改动已有用例：{', '.join(tests['tests_files'][:6])}；说明（复核）：{tests['tests_why']}" if zh else

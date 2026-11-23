@@ -57,13 +57,16 @@ description: >-
     - **性能测试**：bench 的 case 集（`commands.bench`），每个分档至少一个 case，主规模维度按 2 的幂细扫（如 batch 1、2、4…32768，用户 11-23：性能数据是最重要的交付物）；
     - **其他覆盖测试**：只测前两类覆盖不了的（边界与交界、报错、逐位格式、graph、编译缓存……），每条写明前两类为什么覆盖不了；
       能覆盖的不再加，除非特殊说明（写明原因）。放进 `commands.verify_extra`（prep 与收尾时在干净 worktree 跑）；
+    - **只用一个测试文件**（用户 11-23）：基本功能与其他覆盖用例放进同一个文件（SPEC 里定名），用注释分区（区内按算子或路径分小节）；
+      基本功能用例标 `@pytest.mark.basic`（marker 注册在仓库的 pytest 配置里），`commands.correctness` = `pytest <文件> -m basic`，
+      `commands.verify_extra` = `pytest <文件> -m "not basic"`。不随意新建测试文件：确需新文件（例如另一个算子）先问用户；
     - 改动或删除已有用例 / bench 不需要用户批准：复核记录时用 `--tests-why` 说明为什么符合原则，mf 写进提交信息；
       违反原则时才问用户：放宽容差、删掉仍需要的覆盖、加与已有用例重复的用例。
     派实现者和复核时，把这条原样写进 prompt。
 14. 入口文档 = 给 tech lead 的设计文档（用户 11-22；标准见 skill `myflow-review`）：10 分钟读完，能回答做什么、整体怎么做、
     为什么这样做、做到什么程度、风险与下一步；只写当前设计，过程写进提交信息。第 4 节写明基线与对照的来源：
     冻结基线由 mf 生成块给出；性能对照写实现、版本或提交、调用方式、各档实际选中的 kernel、是否同进程同协议；
-    精度参考写参考实现与容差。spec 阶段就把对照来源写进 SPEC。核心 kernel 的完整任务划分与逐拍流水线写在同目录 `kernels.md`；流水线 kernel 的源码写法（docstring、命名、region、不变量）见 `/opt/myflow/templates/KERNEL_SOURCE.md`。
+    精度参考写参考实现与容差。spec 阶段就把对照来源写进 SPEC。核心 kernel 的 Triton 风格函数（算什么）、完整任务划分与逐拍流水线（怎么搬）写在同目录 `kernels.md`；流水线 kernel 的源码写法（docstring、命名、region、不变量）见 `/opt/myflow/templates/KERNEL_SOURCE.md`。
 15. 子 agent 模型（用户 11-22）：启动任何 agent / 子 agent（bootstrap 实现者、lane、复核、调研 explore、其他辅助）一律用
     Claude Opus 5.5、推理强度 max：runSubagent 传 `model="Claude Opus 5.5 (copilot)"`（实测即 max）；其他运行时选同一模型与 max。
     不要用默认模型；子 agent 再派子 agent 时同样如此，派发时把这条写进 prompt。

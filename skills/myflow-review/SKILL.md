@@ -47,6 +47,9 @@ description: >-
 
 **kernel 设计说明**（用户 11-22）：入口文档只放骨架；每个核心 kernel 的完整任务划分与流水线写在入口文档同目录的 `kernels.md`
 （模板 `/opt/myflow/templates/KERNELS.md`），每个 kernel 一节，写给要读 / 改 kernel 的人：
+- Triton 风格的函数（用户 11-23，≤25 行，放在每节最前）：一个 program = 一个 CTA，只写算什么（读哪些数据、怎么累加、
+  哪一步乘哪个 scale、写到哪里），搬运与排布留给流水线；文件开头「先读：Triton 风格的写法」一节统一定义记号、
+  辅助函数与各路径的 kernel 调用顺序；kernel 改了要同步改它；
 - 任务划分表：grid、CTA（线程数）、wave、lane、K 步各负责什么数据；
 - 逐拍流水线伪代码（≤40 行）：序言、主循环每一拍、收尾的读 / 算 / 写，标出预取距离、LDS 读写与 barrier，关键行链接到代码；
   多 region 的 K 循环用 region 表（MFMA / LDS → VGPR / DMA → LDS）；
@@ -60,7 +63,9 @@ description: >-
 - **性能测试**（`commands.bench`）：每个分档至少一个 case；
 - **其他覆盖测试**（`commands.verify_extra`，prep / 收尾时跑）：只测前两类覆盖不了的，每条写明为什么覆盖不了；
   前两类能覆盖的不再加，除非特殊说明（写明原因）。
-- 新用例放新文件，按类别分文件（或 pytest marker），让 `commands.correctness` 只选中基本功能测试。
+- 只用一个测试文件（用户 11-23）：本任务的用例全在 SPEC 定的那个文件里，新用例加进对应区域，**不新建测试文件**；
+  文件用注释分区（基本功能 / 其他覆盖，区内按算子或路径分小节），基本功能用例标 `@pytest.mark.basic`，
+  `commands.correctness` 用 `-m basic`、`commands.verify_extra` 用 `-m "not basic"`。确需新文件（例如另一个算子）时，放在结果最前面交编排者问用户。
 - 改动或删除里程碑开始前已有的用例 / bench（含实现者改的）不需要用户批准，但记录时必须加 `--tests-why "<为什么符合原则>"`，
   mf 把它写进提交信息。
 - 违反原则的改动不要做：放宽容差、删掉仍需要的覆盖、加与已有用例重复的用例。确实需要时，放在结果最前面交编排者问用户。

@@ -238,6 +238,38 @@ class MilestoneTest(MilestoneBase):
         self.assertEqual(rc, 3, out)
         self.assertIn("契约", out)
 
+    def test_finer_bench_is_refrozen_and_published_by_a_maint_milestone(self):
+        """User request 11-23: performance data is the main deliverable. An approved finer bench is committed after
+        the last milestone and frozen there; a maint milestone without lane publishes it, the entry document shows
+        the new freeze per case, sparse size series are flagged and the perf section needs TB/s and a data block."""
+        tdir, wt, c1 = self.milestone1()
+        side = self.tmp / "side"
+        git("worktree", "add", "-q", "--detach", str(side), c1, cwd=self.repo)
+        (side / "bench.py").write_text((side / "bench.py").read_text() + "\n# finer sweep\n")
+        git("commit", "-qam", "finer bench", cwd=side)
+        x = git("rev-parse", "HEAD", cwd=side)
+        self.ok("freeze", "t1", "--base", x)
+        self.assertEqual(cli._scope_base(self.st(), {"start": x}), x)  # lanes from it: the new freeze is the oracle
+        self.ok("ms", "plan", "t1", "M3", "--title", "finer bench", "--type", "maint")
+        out = self.ok("ms", "prep", "t1", "M3")
+        self.assertIn("重新冻结", out)
+        self.assertEqual(self.st().milestones["M3"]["prep"]["candidate"], x)
+        d = tdir / "milestones" / "M3"
+        (d / "card.md").write_text("### M3\n**What**: finer bench\n")
+        self.ok("ms", "review", "t1", "M3", "--session", "rv3", "--card", d / "card.md", "--tests-why", "用户要求细扫")
+        self.ok("ms", "close", "t1", "M3", "--next", "await-user")
+        c3 = self.st().milestones["M3"]["close"]["commit"]
+        self.assertIn("bench.py", git("diff", "--stat", c1, c3, cwd=self.repo))
+        self.assertIn(f"重新冻结于 `{x[:10]}`", git("show", f"{c3}:docs/ENTRY.md", cwd=self.repo))
+        self.assertEqual(render.sweep_gaps(["tp2_m1", "tp2_m16", "tp4_m1", "tp4_m2", "tp4_m4", "x"]),
+                         ["tp2_m* 缺 2, 4, 8"])
+        self.assertEqual(render.sweep_gaps([f"tp2_m{1 << k}" for k in range(16)]), [])
+        self.ok("set", "t1", "perf.peak_tbps=5.3")
+        bad = " ".join(ms.doc_problems(self.st(), "## 性能\n快一倍\n"))
+        self.assertIn("TB/s", bad)
+        self.assertIn("详细数据", bad)
+        self.assertEqual(ms.doc_problems(self.st(), "## 性能\n1.9 TB/s\n<!-- mf:perf -->\n<!-- /mf:perf -->\n"), [])
+
     def test_signing_failure_leaves_no_partial_state(self):
         tdir = self.ready()
         self.configure()

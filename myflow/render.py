@@ -20,7 +20,7 @@ from pathlib import Path
 from myflow import guard
 from myflow.core import (MS_TERMINAL, PASS, PHASE_ZH, PHASES, VALID_VERDICTS, MfError, State, all_task_dirs,
                          atomic_write, home)
-from myflow.gitops import github_web
+from myflow.gitops import github_web, is_ancestor
 from myflow.runner import combine_perf, parse_perf
 
 ICON = {"crit": "✖", "warn": "⚠", "ask": "?", "info": "·", "ok": "●"}
@@ -498,6 +498,22 @@ def entry_blocks(st: State, current=None, nxt=None) -> dict:
                    + f" · 最佳累计 {fx(best)}" + (f" · 下一步：{label}" if label else ""))
     perf = ["（尚无复核数据）"]
     latest = next((m for m in reversed(done) if (m.get("prep") or {}).get("cum")), None)
+    fz = st.freeze or {}
+    lc = ((latest or {}).get("close") or {}).get("commit")
+    if (latest and fz and lc and latest["prep"].get("freeze_seq") not in (None, fz.get("seq"))
+            and (lc == fz.get("base") or is_ancestor(Path(st.task["repo"]), lc, fz.get("base")))):
+        # re-frozen after the latest perf milestone (the measurement changed, e.g. a finer bench): its verify used
+        # the old bench; the freeze runs are the current code on the new bench
+        cases = case_order(fz.get("baseline") or {})
+        heads, extra, legend = perf_cols(st, cases, {}, freeze_perf(st), ("基线", "当前"))
+        perf = [f"最近的性能里程碑 {latest['id']}：相对当时的冻结基线 {fx(latest['prep']['cum'].get('speedup'))}"
+                f"（mf 复核 V{latest['prep']['cum'].get('v')}，旧 bench）。之后 bench 改了（重新冻结于 `{fz['base'][:10]}`，"
+                f"含 {latest['id']} 的代码）：下表是当前代码在新 bench 上的逐 case 数据。", "",
+                f"<details><summary>逐 case（{len(cases)} 个，mf 冻结 {fz.get('repeats') or '—'} 次中位，当前代码）</summary>", "",
+                "| case | 当前 µs |" + "".join(f" {h} |" for h in heads), "|---" * (2 + len(heads)) + "|"]
+        perf += [f"| {c} | {_num(fz['baseline'][c])} |" + "".join(f" {x} |" for x in extra[c]) for c in cases]
+        perf += (["", legend] if legend else []) + ["", "</details>"]
+        latest = None
     if latest:
         cum = _verify_n(st, latest["prep"]["cum"]["v"]) or {}
         inc_s = latest["prep"].get("inc") or {}
@@ -545,6 +561,28 @@ def _num(x) -> str:
 def case_order(cases) -> list:
     """Cases in natural order (tp2_m1, tp2_m16, tp2_m128 ...), not as strings."""
     return sorted(cases, key=lambda c: [(0, int(t), "") if t.isdigit() else (1, 0, t) for t in re.split(r"(\d+)", c)])
+
+
+def sweep_gaps(cases) -> list:
+    """Size series in case names (the last number: tp2_m1, tp2_m16 ...) that skip powers of two between their
+    smallest and largest size. Performance data is the main deliverable (user request 11-23): a bench sweeps its main
+    size dimension in powers of two, e.g. batch 1, 2, 4 ... 32768."""
+    groups = {}
+    for c in cases:
+        parts = re.split(r"(\d+)", c)
+        nums = [i for i, s in enumerate(parts) if s.isdigit()]
+        if nums:
+            i = nums[-1]
+            groups.setdefault("".join(parts[:i]) + "*" + "".join(parts[i + 1:]), set()).add(int(parts[i]))
+    out = []
+    for key, sizes in sorted(groups.items()):
+        lo, hi = min(sizes), max(sizes)
+        if len(sizes) < 2 or lo < 1:
+            continue
+        miss = [1 << k for k in range(hi.bit_length()) if lo <= 1 << k <= hi and 1 << k not in sizes]
+        if miss:
+            out.append(f"{key} 缺 {', '.join(map(str, miss[:8]))}{' …' if len(miss) > 8 else ''}")
+    return out
 
 
 # ---------------------------------------------------------------- throughput (display only, from raw logs)

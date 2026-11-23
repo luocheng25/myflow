@@ -114,9 +114,12 @@ def _scope_base(st: State, ln: dict) -> str:
     start = ln.get("start")
     if start:
         repo = Path(st.task["repo"])
+        fb = st.freeze["base"]
         for m in reversed(st.closed_ms):
             c = m["close"]["commit"]
             if c == start or is_ancestor(repo, c, start):
+                if fb != c and is_ancestor(repo, c, fb) and (fb == start or is_ancestor(repo, fb, start)):
+                    return fb  # re-frozen after that milestone (the measurement changed): the new freeze is the oracle
                 return c
     return st.freeze["base"]
 
@@ -460,6 +463,11 @@ def cmd_freeze(a):
     print(f"frozen {st.id} @ {base[:10]} on {render.gpu_txt(gpu)}: {len(med)} cases, noise {render.pct(noise)}")
     for c_, v in list(med.items())[:12]:
         print(f"  {render.pad(c_, 40)} {v:g} {t['metric'].get('name', '')}")
+    gaps = render.sweep_gaps(med) if (t.get("perf") or {}).get("sweep", True) else []
+    if gaps:
+        print("[mf] ⚠ bench 的规模档位按 2 的幂不连续：" + "；".join(gaps[:4]) + "。性能数据是最重要的交付物："
+              "主规模维度按 2 的幂细扫（如 batch 1、2、4…32768），见 skill myflow-bench；确实不需要时 perf.sweep=false",
+              file=sys.stderr)
     _after(tdir)
 
 

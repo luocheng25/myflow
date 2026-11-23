@@ -113,6 +113,15 @@ def doc_problems(st: State, text: str) -> list:
     traces = [f"{label} ×{n}" for label, pat in DOC_TRACES for n in [len(re.findall(pat, core))] if n]
     if traces:
         out.append("过程痕迹：" + "、".join(traces) + "（放提交信息或 mf 报告，设计文档只写当前设计）")
+    # performance data is the main deliverable (user request 11-23): per tier the throughput of this implementation and
+    # the reference, and the per-case data (mf's generated block, or a link to a data file)
+    pk = st.task.get("perf") or {}
+    want = [u for u, k in (("TB/s", "peak_tbps"), ("TFLOPS", "peak_tflops")) if pk.get(k)]
+    miss = [u for u in want if u.lower() not in core.lower()]
+    if miss:
+        out.append(f"性能节没有 {' / '.join(miss)}：每档写本实现与对照的 {' / '.join(want)}（含占峰值）")
+    if "<!-- mf:perf -->" not in text and not re.search(r"\]\([^)]*perf[^)]*\)", core, re.I):
+        out.append("没有逐 case 详细数据：保留 <!-- mf:perf --> 生成块，或链接到详细数据文件")
     return out
 
 
@@ -771,6 +780,13 @@ def cmd_prep(a):
             raise MfError("--lane (or --bootstrap) is required for feature/perf milestones; "
                           "analysis/maint milestones without --lane change only docs/tests")
         candidate = parent
+        fb = (st.freeze or {}).get("base")
+        if fb and fb != parent and is_ancestor(repo, parent, fb):
+            # re-frozen on a commit after the last milestone (a user-approved measurement change, e.g. a finer
+            # bench): that commit is what the new baseline measured, so this milestone publishes it
+            candidate = fb
+            print(f"[mf] 冻结基线 {fb[:10]} 在 {prev_label(st)} 之后（重新冻结时改了度量）：本里程碑以它为候选，一并推送",
+                  flush=True)
     excluded = non_runtime(pins)
     if pins["tests"]:
         under = [p for p, _ in ls_tree(repo, candidate) if match(p, pins["tests"])]

@@ -75,7 +75,7 @@ DEFAULTS = {
     # TFLOPS for every implementation compared): device peaks for the "% of peak" cells, and perf.extract regexes
     # (named groups case / value; fields tbps, tflops, ref_tbps, ref_tflops) for frozen benches that print
     # throughput elsewhere instead of bytes= / flops= on their MF_METRIC / MF_REF lines
-    "perf": {"peak_tbps": None, "peak_tflops": None, "extract": {}},
+    "perf": {"peak_tbps": None, "peak_tflops": None, "extract": {}, "sweep": True},
 }
 MS_TERMINAL = ("done", "report", "stop", "await-user")
 # What gets published (docs, milestone commit messages, PR descriptions) must be in this language when the task's

@@ -34,7 +34,9 @@ description: >-
   每次 `mf try` 都先跑，整套控制在 1–2 分钟内。
 - `commands.verify_extra` = **其他覆盖测试**：边界 shape（非对齐、最小、最大、交界两侧）、报错、graph 等前两类覆盖不了的；
   prep 与收尾时在干净 worktree 跑。前两类能覆盖的不再加。
-- `commands.bench` = **性能测试**：每个分档至少一个 case。
+- `commands.bench` = **性能测试**：每个分档至少一个 case。性能数据是最重要的交付物（用户 11-23）：每个配置把主规模维度
+  按 2 的幂细扫，覆盖使用范围两端（如 batch 1、2、4…32768），不只取分档代表点；每个 case 都打印 MF_REF 与 flops / bytes。
+  `mf freeze` 对按 2 的幂不连续的档位报警（确实不需要时 `perf.sweep=false`）。
 - 对独立参考（高精度或原实现）逐元素比较；容差写死。校验的必须是被计时的那条路径与那个输出。
 - 能断言时，断言新路径确实被执行（例如检查 dispatch 选中的 kernel 名），防止静默回退。
 

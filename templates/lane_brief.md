@@ -26,7 +26,8 @@ mf 会自动执行（不要自己另写计时）：正确性 `{{correctness}}`�
 3. 连续失败 {{max_fail_streak}} 次：回到本线最佳提交重来；同一类改法连续 3 次无效：换类别。
 4. 不要重复已被否定的想法（看 `mf status {{task}}` 的死路和 `mf note --kind deadend` 记录）。
 5. 重复做第二次的事写成脚本放 `{{task_dir}}/tools/`（第一行 docstring 写用途+用法）。
-6. 结束时（达标 / 本方向到顶 / 预算到）：`mf lane set ... --reason`，最后回复 ≤10 行：最佳 A 编号、自测加速、关键改动、未解决问题。
+6. 流水线 kernel 的源码按 `/opt/myflow/templates/KERNEL_SOURCE.md` 写；docstring 的 region 表、命名、不变量与代码同一次提交更新。
+7. 结束时（达标 / 本方向到顶 / 预算到）：`mf lane set ... --reason`，最后回复 ≤10 行：最佳 A 编号、自测加速、关键改动、未解决问题。
 
 ## 已有工具
 {{tools}}

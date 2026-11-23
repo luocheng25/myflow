@@ -49,6 +49,9 @@ description: >-
 （模板 `/opt/myflow/templates/KERNELS.md`），每个 kernel 一节，写给要读 / 改 kernel 的人：
 - 任务划分表：grid、CTA（线程数）、wave、lane、K 步各负责什么数据；
 - 逐拍流水线伪代码（≤40 行）：序言、主循环每一拍、收尾的读 / 算 / 写，标出预取距离、LDS 读写与 barrier，关键行链接到代码；
+  多 region 的 K 循环用 region 表（MFMA / LDS → VGPR / DMA → LDS）；
+- 命名表与编号的流水线不变量（写法见 `/opt/myflow/templates/KERNEL_SOURCE.md`）；源码 docstring 已写全时链接过去、不重复，
+  docstring 与代码对不上时写进卡片「已知问题」交编排者（你不改代码）；
 - 同样只写当前实现、不写过程痕迹；与代码对不上就改文档。
 
 ## 测试原则（用户 11-22）

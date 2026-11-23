@@ -63,7 +63,7 @@ description: >-
 14. 入口文档 = 给 tech lead 的设计文档（用户 11-22；标准见 skill `myflow-review`）：10 分钟读完，能回答做什么、整体怎么做、
     为什么这样做、做到什么程度、风险与下一步；只写当前设计，过程写进提交信息。第 4 节写明基线与对照的来源：
     冻结基线由 mf 生成块给出；性能对照写实现、版本或提交、调用方式、各档实际选中的 kernel、是否同进程同协议；
-    精度参考写参考实现与容差。spec 阶段就把对照来源写进 SPEC。核心 kernel 的完整任务划分与逐拍流水线写在同目录 `kernels.md`。
+    精度参考写参考实现与容差。spec 阶段就把对照来源写进 SPEC。核心 kernel 的完整任务划分与逐拍流水线写在同目录 `kernels.md`；流水线 kernel 的源码写法（docstring、命名、region、不变量）见 `/opt/myflow/templates/KERNEL_SOURCE.md`。
 15. 子 agent 模型（用户 11-22）：启动任何 agent / 子 agent（bootstrap 实现者、lane、复核、调研 explore、其他辅助）一律用
     Claude Opus 5.5、推理强度 max：runSubagent 传 `model="Claude Opus 5.5 (copilot)"`（实测即 max）；其他运行时选同一模型与 max。
     不要用默认模型；子 agent 再派子 agent 时同样如此，派发时把这条写进 prompt。

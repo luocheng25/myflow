@@ -32,6 +32,9 @@ description: >-
 - 因权限 / 沙箱无法运行 mf 时：不要绕过、不要自己计时；把代码留在 worktree（或写明路径），汇报阻塞原因和需要编排者执行的命令。
 - 连续失败达到上限：`git -C <wt> reset --hard <最佳尝试的 commit>` 后换思路；同一类改法（算法 / 访存 / 计算 / launch）连续 3 次无效就换类别。
 - 不重试已被否定的想法：先看 `mf status <task>` 里已放弃的 lane 和死路记录。
+- 写 / 改流水线 kernel（多 region、LDS 多 buffer、异步 DMA）按 `/opt/myflow/templates/KERNEL_SOURCE.md`：模块 docstring 写
+  Tile / Schedule / K step 的 region 表 / Naming / Pipeline rules；region 写成 with 块、每条搬运行尾注明 `# DMA X(k+2)` / `# LR X(k)`；
+  改了流水线，同一次提交更新 docstring 的 region 表、`in_flight` 推导和受影响的规则。
 - 发现规律或坑：`mf note <task> --lane <lane> --kind finding|deadend "…（证据 A7）" [--file 笔记]`；本线历史：`mf status <task> --lane <lane>`。
 - 同一操作做第二次时，写成脚本放进 `<task_dir>/tools/`，第一行 docstring 写“用途 + 用法”。
 - 需要再派子 agent（例如只读调研）时，一律用 Claude Opus 5.5、推理强度 max（runSubagent 传 `model="Claude Opus 5.5 (copilot)"`），不用默认模型。

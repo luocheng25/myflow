@@ -20,7 +20,7 @@ description: >-
 1. 性能数字只来自 `mf try`（自测、未配对）和 `mf ms prep` 的复核（官方：干净 worktree + 同卡 ABBA）。向用户汇报时引用 `mf status` 的表；
    性能数据（含与对照的比较）每个实现都带耗时、TB/s 与 TFLOPS（括号内占峰值），用 mf 表格的列，不另算（用户 11-22）。
 2. gate=ask 的阶段：`mf brief <id> --ask "…"`（≤600 字）后**停下来问用户**；得到回复再 `mf decide <id> --gate <key> "…" --quote "<用户原话>"`。绝不替用户批准。
-3. 冻结后 lane 不改 oracle（`scope.protect` 下的用例与 bench），也不改度量契约（bench / 正确性命令、`scope.protect` 等）；必须改契约时先问用户，再 `mf set` + `mf freeze`。收尾时复核可按第 13 条补 / 改用例（bench 除外）。
+3. 冻结后 lane 不改 oracle（`scope.protect` 下的用例与 bench），也不改度量契约（bench / 正确性命令、`scope.protect` 等）；必须改契约时先问用户，再 `mf set` + `mf freeze`；改 bench（如细扫）时在上一里程碑之上提交 bench → `mf freeze --base <该提交>` → 不带 lane 的维护型里程碑（prep 自动以新冻结基线为候选）收尾推送。收尾时复核可按第 13 条补 / 改用例（bench 除外）。
 4. 遇到 REFUSED（exit 3）或 crit 预警：停止派发，向用户汇报现状并给出选项。
 5. 📨 用户留言优先：照做，然后 `mf note <id> --ack <n> "怎么处理的"`。
 6. mf 自己挂起的 gate（推送目标变了的 `push:…`、覆盖远端的 `push-replace:…`）只是记录，**mf 不会问用户**。在任何 mf 输出里（包括子 agent 带回的）看到「需要用户确认【key】」：

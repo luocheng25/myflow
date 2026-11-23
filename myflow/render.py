@@ -489,7 +489,8 @@ def ms_text(st: State, m: dict) -> str:
 def entry_blocks(st: State, current=None, nxt=None) -> dict:
     """Generated blocks of the entry document: numbers come only from mf records. nxt: the --next of a closing milestone."""
     done = list(st.closed_ms) + ([current] if current and current.get("status") == "closing" else [])
-    cums = [(m.get("prep") or {}).get("cum") for m in done]
+    seq = (st.freeze or {}).get("seq")  # a speedup against an earlier freeze is not against this base
+    cums = [(m.get("prep") or {}).get("cum") for m in done if (m.get("prep") or {}).get("freeze_seq") in (None, seq)]
     best = max((c["speedup"] for c in cums if c), default=None)
     label = next_plan(st, nxt) if nxt else next_label(st, exclude=(current or {}).get("id"))
     n_done = len(st.closed_ms) + (1 if current else 0)

@@ -1197,6 +1197,16 @@ def cmd_report(a):
         patch = tdir / "final.patch"
         write_patch(Path(t["repo"]), st.freeze["base"], final["commit"], patch)
         L += ["", f"补丁：`{patch}`（git diff 基线..最终提交）", ""]
+    elif (st.freeze or {}).get("baseline"):
+        # nothing verified against this freeze yet (e.g. just re-frozen on a finer bench): the frozen code per case
+        fz = st.freeze
+        cs = render.case_order(fz["baseline"])
+        heads, extra, legend = render.perf_cols(st, cs, {}, render.freeze_perf(st), ("基线", "当前"))
+        L += [f"本冻结轮次（`{fz['base'][:10]}`）还没有复核过的候选；下表是冻结基线（当前代码）的逐 case 数据"
+              f"（bench {fz.get('repeats') or '—'} 次中位，{render.gpu_txt(fz.get('gpu'))}，噪声 {render.pct(fz.get('noise'))}）。", "",
+              "| case | 当前 µs |" + "".join(f" {h} |" for h in heads), "|---" * (2 + len(heads)) + "|"]
+        L += [f"| {c} | {fz['baseline'][c]:g} |" + "".join(f" {x} |" for x in extra[c]) for c in cs]
+        L += (["", legend] if legend else []) + [""]
     else:
         L += ["没有通过复核的结果。", ""]
     if st.milestones:

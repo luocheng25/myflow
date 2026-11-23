@@ -262,6 +262,8 @@ class MilestoneTest(MilestoneBase):
         self.assertIn("bench.py", git("diff", "--stat", c1, c3, cwd=self.repo))
         self.assertIn(f"重新冻结于 `{x[:10]}`", git("show", f"{c3}:docs/ENTRY.md", cwd=self.repo))
         self.assertIn("最佳累计 —", git("show", f"{c3}:docs/ENTRY.md", cwd=self.repo))  # M1's 1.3x was another base
+        self.ok("report", "t1")
+        self.assertIn(f"本冻结轮次（`{x[:10]}`）还没有复核过的候选", (tdir / "REPORT.md").read_text())
         self.assertEqual(render.sweep_gaps(["tp2_m1", "tp2_m16", "tp4_m1", "tp4_m2", "tp4_m4", "x"]),
                          ["tp2_m* 缺 2, 4, 8"])
         self.assertEqual(render.sweep_gaps([f"tp2_m{1 << k}" for k in range(16)]), [])

@@ -273,6 +273,70 @@ class MilestoneTest(MilestoneBase):
         self.assertIn("详细数据", bad)
         self.assertEqual(ms.doc_problems(self.st(), "## 性能\n1.9 TB/s\n<!-- mf:perf -->\n<!-- /mf:perf -->\n"), [])
 
+    def test_bench_part_follows_what_the_script_entry_runs(self):
+        src = ("import json\nimport os\n\nA = 1\nB = 2\n\n\ndef f():\n    return A\n\n\ndef test_x():\n    assert f() == 1\n"
+               "\n\ndef g():\n    return B\n\n\nif __name__ == '__main__':\n    print(json.dumps(g()))\n")
+        p = ms.bench_part(src)
+        self.assertIsNotNone(p)
+        self.assertEqual(ms.bench_part(src.replace("A = 1", "A = 5").replace("== 1", "== 5")), p)  # test-only constant
+        self.assertEqual(ms.bench_part(src.replace("import os\n", "import os\nimport re\n")), p)  # unused import
+        self.assertEqual(ms.bench_part(src.replace("return B", "return B  # note")), p)  # comments do not count
+        self.assertNotEqual(ms.bench_part(src.replace("B = 2", "B = 3")), p)  # used by the bench
+        self.assertNotEqual(ms.bench_part(src.replace("import os\n", "import os\nos.environ['X'] = '1'\n")), p)
+        self.assertIsNone(ms.bench_part(src.replace("if __name__ == '__main__':\n    print(json.dumps(g()))\n", "")))
+        self.assertIsNone(ms.bench_part(src + "\n\ndef test_late():\n    pass\n"))  # the bench region must come last
+
+    def test_review_edits_the_tests_of_a_file_that_also_holds_the_bench(self):
+        """User request 11-23: one test file per operator, its performance test being the file's script entry (the
+        bench). The review may change its tests and what only they use; the bench region, the top-level definitions it
+        uses and module-level statements stay part of the runtime. A bench file without tests stays protected whole."""
+        self.ok("new", "b2", "--repo", self.repo, "--goal", "new op")
+        self.ok("set", "b2", "commands.correctness=python3 test_kernel.py",
+                "commands.bench=python3 tests/test_op.py && python3 tests/sweep.py", 'scope.allow=["kernel.py"]',
+                'scope.protect=["bench.py","test_kernel.py","tests/**"]', "gpu.pool=none", "doc.entry=docs/ENTRY.md",
+                'tests.paths=["test_kernel.py","tests/**"]')
+        tdir = self.tmp / "home" / "tasks" / "b2"
+        self.ok("brief", "b2", "--ask", "ok?")
+        self.ok("decide", "b2", "--gate", "spec", "yes")
+        self.ok("ms", "bootstrap", "b2")
+        bwt, wt = tdir / "wt" / "_bootstrap", tdir / "wt" / "_ms"
+        src = ("import json\n\nBASE = 10\nSMALL = 2\n\n\ndef helper():\n    return SMALL\n\n\n"
+               "def test_one():\n    assert helper() == 2\n\n\n# bench region\nN = 3\n\n\n"
+               "def bench():\n    print(json.dumps({'x': BASE * N}))\n\n\nif __name__ == '__main__':\n    bench()\n")
+        (bwt / "tests").mkdir(exist_ok=True)
+        (bwt / "tests" / "test_op.py").write_text(src)
+        (bwt / "tests" / "sweep.py").write_text("print('{}')\n")
+        self.ok("ms", "plan", "b2", "M0", "--type", "feature", "--title", "op")
+        out = self.ok("ms", "prep", "b2", "M0", "--bootstrap")
+        self.assertIn("tests/test_op.py 兼作 bench", out)
+        self.assertEqual(self.st("b2").milestones["M0"]["prep"]["pins"]["bench_split"], ["tests/test_op.py"])
+        d, f = tdir / "milestones" / "M0", wt / "tests" / "test_op.py"
+        (d / "card.md").write_text("### M0\n**What**: op\n")
+
+        def review(text, name="test_op.py"):
+            (wt / "tests" / name).write_text(text)
+            return mf("ms", "review", "b2", "M0", "--session", "rv", "--card", d / "card.md")
+
+        for bad in (src.replace("N = 3", "N = 4"), src.replace("BASE = 10", "BASE = 11"),
+                    src + "\n\ndef test_late():\n    pass\n"):
+            rc, out = review(bad)
+            self.assertEqual(rc, 3, out)
+            self.assertIn("性能测试区域", out)
+        f.write_text(src)
+        rc, out = review("print('[]')\n", "sweep.py")
+        self.assertEqual(rc, 3, out)
+        self.assertIn("改到了 bench", out)
+        self.assertNotIn("性能测试区域", out)
+        (wt / "tests" / "sweep.py").write_text("print('{}')\n")
+        good = src.replace("SMALL = 2", "SMALL = 3").replace("== 2", "== 3").replace(
+            "# bench region", "def test_two():\n    assert helper() > 0\n\n\n# bench region (timed)")
+        rc, out = review(good)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("可以收尾", out)
+        self.ok("ms", "close", "b2", "M0", "--next", "await-user")
+        c = self.st("b2").milestones["M0"]["close"]["commit"]
+        self.assertIn("def test_two", git("show", f"{c}:tests/test_op.py", cwd=self.repo))
+
     def test_signing_failure_leaves_no_partial_state(self):
         tdir = self.ready()
         self.configure()

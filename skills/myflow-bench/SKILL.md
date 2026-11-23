@@ -35,7 +35,8 @@ description: >-
 - `commands.verify_extra` = **其他覆盖测试**：边界 shape（非对齐、最小、最大、交界两侧）、报错、graph 等前两类覆盖不了的；
   prep 与收尾时在干净 worktree 跑。前两类能覆盖的不再加。
 - 三类测试放同一个文件（注释分区）：基本功能标 `@pytest.mark.basic`，`correctness` 用 `-m basic`、`verify_extra` 用 `-m "not basic"`；
-  bench 写成该文件的 `__main__` 脚本入口（`commands.bench` = `python <文件>`，函数名不以 `test` 开头，pytest 不收集）；
+  bench 写成该文件的 `__main__` 脚本入口（`commands.bench` = `python <文件>`，函数名不以 `test` 开头，pytest 不收集），
+  性能测试区域放在最后一个 test / fixture 之后（mf 据此把它及其用到的顶层定义算作 bench，其余算用例）；
   不新建测试文件（用户 11-23，见 kernel-opt 第 13 条；上面的参考实现仍是分开的两个文件，只借鉴写法）。
 - `commands.bench` = **性能测试**：每个分档至少一个 case。性能数据是最重要的交付物（用户 11-23）：每个配置把主规模维度
   按 2 的幂细扫，覆盖使用范围两端（如 batch 1、2、4…32768），不只取分档代表点；每个 case 都打印 MF_REF 与 flops / bytes。

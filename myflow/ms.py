@@ -3,7 +3,8 @@ independent roles (tests / writer / cold-read verifier) -> close (final commit, 
 
 Design: docs/DESIGN-v2-milestones.md. Invariants enforced here:
 - the pushed commit is the accepted one: its runtime tree (everything except doc and protected-test files, as
-  defined by the globs pinned at prep) equals the candidate's, whose incremental ABBA vs the previous milestone was
+  defined by the globs pinned at prep; a protected test file that also holds the bench keeps its bench part) equals
+  the candidate's, whose incremental ABBA vs the previous milestone was
   measured at prep under the current freeze; correctness re-runs on that exact commit before any ref moves;
 - each role may change only its own files, every role record leaves a checkpoint tree (who changed what is
   provable), three roles = three sessions; changes to protected tests need the user's approval;
@@ -14,6 +15,7 @@ Design: docs/DESIGN-v2-milestones.md. Invariants enforced here:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import shutil
@@ -135,12 +137,105 @@ def is_doc(path: str, pins: dict) -> bool:
 
 
 def is_test(path: str, pins: dict) -> bool:
-    """Protected tests only (lanes cannot touch them; the tests role needs the user's approval); never the bench."""
-    return match(path, pins["tests"]) and match(path, pins["protect"]) and not _bench_ref(path, pins)
+    """Protected tests only (lanes cannot touch them; the tests role needs the user's approval); never the bench, except
+    a test file that also holds it (`bench_split`, pinned at prep): its tests are tests, its bench part is runtime."""
+    return (match(path, pins["tests"]) and match(path, pins["protect"])
+            and (not _bench_ref(path, pins) or path in (pins.get("bench_split") or ())))
 
 
 def non_runtime(pins: dict):
     return lambda p: is_doc(p, pins) or is_test(p, pins)
+
+
+def _top_names(node) -> set:
+    """Names a top-level statement binds (imports, assignments, def / class), not looking into function bodies."""
+    out, todo = set(), [node]
+    while todo:
+        n = todo.pop()
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(n.name)
+            continue
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            out |= {(x.asname or x.name).split(".")[0] for x in n.names}
+        elif isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+            out.add(n.id)
+        todo.extend(ast.iter_child_nodes(n))
+    return out
+
+
+def _is_pytest(node) -> bool:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return node.name.startswith("test") or any("fixture" in ast.dump(d) for d in node.decorator_list)
+    return isinstance(node, ast.ClassDef) and node.name.startswith("Test")
+
+
+def _is_main(node) -> bool:
+    t = getattr(node, "test", None)
+    return (isinstance(node, ast.If) and isinstance(t, ast.Compare) and isinstance(t.left, ast.Name)
+            and t.left.id == "__name__" and len(t.comparators) == 1
+            and getattr(t.comparators[0], "value", None) == "__main__")
+
+
+def _binds_only(node) -> bool:
+    """A top-level statement that only binds names: import, def / class, or an assignment to plain names."""
+    if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return True
+    targets = (node.targets if isinstance(node, ast.Assign) else
+               [node.target] if isinstance(node, (ast.AnnAssign, ast.AugAssign)) else None)
+    return targets is not None and all(
+        isinstance(x, ast.Name) or isinstance(x, (ast.Tuple, ast.List)) and all(isinstance(e, ast.Name) for e in x.elts)
+        for x in targets)
+
+
+def bench_part(text: str):
+    """What the script entry of a test file that also holds the bench runs (user request 11-23): the bench region
+    (everything after the last pytest test / fixture, holding the `if __name__ == "__main__":` entry), the top-level
+    definitions it uses (transitively) and the module-level statements that are not plain definitions (calls,
+    attribute / item assignments, if / try ...). Its AST dump (comments and layout do not count), or None when the file
+    is not laid out that way (then the whole file is the bench)."""
+    try:
+        body = ast.parse(text).body
+    except (SyntaxError, ValueError):
+        return None
+    last = max((i for i, n in enumerate(body) if _is_pytest(n)), default=-1)
+    head, tail = body[:last + 1], body[last + 1:]
+    if last < 0 or not any(_is_main(n) for n in tail):
+        return None
+    keep = {i for i, n in enumerate(head) if not _binds_only(n)
+            and not (i == 0 and isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))}  # not the docstring
+    binds = [_top_names(n) for n in head]
+    todo, seen = tail + [head[i] for i in keep], set()
+    while todo:
+        used = {x.id for n in todo for x in ast.walk(n) if isinstance(x, ast.Name)} - seen
+        seen |= used
+        new = {i for i, b in enumerate(binds) if i not in keep and b & used}
+        keep |= new
+        todo = [head[i] for i in new]
+    return "\n".join(ast.dump(n) for n in [head[i] for i in sorted(keep)] + tail)
+
+
+def _bench_fp(repo, blobs: dict, path: str) -> str:
+    blob = blobs.get(path)
+    part = bench_part(git(["cat-file", "blob", blob], repo)) if blob and path.endswith(".py") else None
+    return sha16(part) if part is not None else f"whole:{blob}"
+
+
+def bench_split(repo, treeish: str, pins: dict) -> list:
+    """Protected test files the bench command runs that split into tests + a bench part (see bench_part)."""
+    blobs = dict(ls_tree(repo, treeish))
+    return sorted(p for p in blobs if match(p, pins["tests"]) and match(p, pins["protect"]) and _bench_ref(p, pins)
+                  and not _bench_fp(repo, blobs, p).startswith("whole:"))
+
+
+def runtime_hash(repo, treeish: str, pins: dict) -> str:
+    """Everything that can change what runs: the tree without docs and protected tests, plus the bench part of each
+    test file that also holds the bench (a file that no longer splits counts whole, so any change shows)."""
+    rt = runtime_tree_hash(repo, treeish, non_runtime(pins))
+    split = pins.get("bench_split") or []
+    if not split:
+        return rt
+    blobs = dict(ls_tree(repo, treeish))
+    return sha16(rt + "".join(f"|{p}={_bench_fp(repo, blobs, p)}" for p in split))
 
 
 def ms_dir(st: State, mid: str) -> Path:
@@ -201,7 +296,8 @@ def _merge_close(st: State, candidate: str, parent: str, last: dict, mid: str) -
     merged = commit_tree(wt, git(["rev-parse", "HEAD^{tree}"], wt), candidate,
                          f"mf {st.id}: 合并 {last['id']} 的收尾提交（文档 / 用例）到 {mid} 的候选", also=[parent])
     pins = pins_now(st)
-    if runtime_tree_hash(repo, merged, non_runtime(pins)) != runtime_tree_hash(repo, candidate, non_runtime(pins)):
+    pins["bench_split"] = bench_split(repo, candidate, pins)
+    if runtime_hash(repo, merged, pins) != runtime_hash(repo, candidate, pins):
         raise MfRefused(f"合并 {last['id']} 的收尾提交后运行时代码变了（收尾只应改文档 / 用例）：先查明再 prep")
     print(f"[mf] 流水线：候选是在 {last['id']} 收尾期间开始的，已自动合并 {last['id']} 的收尾提交（只多了文档 / 用例）→ {merged[:10]}",
           flush=True)
@@ -543,7 +639,10 @@ def role_prompts(st: State, m: dict) -> str:
     entry = st.task["doc"].get("entry")
     entry_p = (f"{wt}/{entry}（给 tech lead 的设计文档，标准见 skill myflow-review：不含 mf 生成块 ≤{doc_budget(st)} 行）"
                if entry else "（未设置 doc.entry：只写卡片）")
-    tp = (", ".join(pins["tests"]) + "（且在 scope.protect 内、不是 bench）") if pins["tests"] else "（未设置 tests.paths：不能改用例）"
+    split = pins.get("bench_split") or []
+    tp = (", ".join(pins["tests"]) + "（且在 scope.protect 内、不是 bench"
+          + (f"；{', '.join(split)} 兼作 bench：只能改其中的用例，末尾的性能测试区域、它用到的顶层定义和模块级语句不能改"
+             if split else "") + "）") if pins["tests"] else "（未设置 tests.paths：不能改用例）"
     dp = (", ".join(pins["doc"]) + "（只限 .md / .rst）") if pins["doc"] else "（未设置 doc.paths：只写卡片）"
     mf, tid = cli.MF, st.id
     diff = f"git -C {wt} diff {prep['parent'][:12]} --stat"
@@ -787,7 +886,7 @@ def cmd_prep(a):
             candidate = fb
             print(f"[mf] 冻结基线 {fb[:10]} 在 {prev_label(st)} 之后（重新冻结时改了度量）：本里程碑以它为候选，一并推送",
                   flush=True)
-    excluded = non_runtime(pins)
+    pins["bench_split"] = bench_split(repo, candidate, pins)
     if pins["tests"]:
         under = [p for p, _ in ls_tree(repo, candidate) if match(p, pins["tests"])]
         loose = [p for p in under if not match(p, pins["protect"])]
@@ -795,7 +894,7 @@ def cmd_prep(a):
             print(f"[mf] ⚠ tests.paths 下{'有不受 scope.protect 保护的文件：' + ', '.join(loose[:5]) if loose else '目前没有文件'}。"
                   "测试负责人只能改受保护的用例，新增的用例文件也必须匹配 scope.protect"
                   "（建议 protect 用目录通配，例如 tests/ops/<op>/**），否则收尾会拒绝", file=sys.stderr)
-    rt = runtime_tree_hash(repo, candidate, excluded)
+    rt = runtime_hash(repo, candidate, pins)
     size = _size(st, parent, candidate, pins)
     mx = int(t["milestone"].get("max_lines") or 0)
     if mx and size["lines"] > mx and not a.size_why:
@@ -884,9 +983,13 @@ def cmd_review(a):
     stage_worktree(wt, _ignore(st))
     tree = write_tree(wt)
     changed = tree_diff_names(repo, m.get("checkpoint") or prep["tree"], tree)
-    benchy = [f for f in changed if match(f, pins["protect"]) and _bench_ref(f, pins)]
+    split = set(pins.get("bench_split") or [])
+    old, new = dict(ls_tree(repo, prep["tree"])), dict(ls_tree(repo, tree))
+    benchy = [f for f in changed if match(f, pins["protect"]) and _bench_ref(f, pins)
+              and (f not in split or _bench_fp(repo, old, f) != _bench_fp(repo, new, f))]
     if benchy:
-        raise MfRefused(f"改到了 bench / 性能用例（{', '.join(benchy)}）：这会改变度量，需要用户批准并重新冻结基线，"
+        part = "；兼作 bench 的用例文件只能改用例，末尾的性能测试区域、它用到的顶层定义和模块级语句不能改" if split & set(benchy) else ""
+        raise MfRefused(f"改到了 bench / 性能用例（{', '.join(benchy)}{part}）：这会改变度量，需要用户批准并重新冻结基线，"
                         "不能在收尾里做。先撤销，改为单独和用户确认")
     bad = [f for f in changed if not (is_doc(f, pins) or is_test(f, pins))]
     if bad:
@@ -1013,7 +1116,7 @@ def cmd_close(a):
         # mf's own blocks (roadmap, summary) show the plan as of this close, not as of prep
         stage_worktree(wt, _ignore(st))
         tree = write_tree(wt)
-    rt = runtime_tree_hash(repo, tree, non_runtime(pins))
+    rt = runtime_hash(repo, tree, pins)
     if rt != prep["runtime_tree"]:
         raise MfRefused("运行时树与验收时的候选不同（文档 / 受保护用例之外有改动）：验收结果不再适用。"
                         f"撤销这些改动，或 mf ms drop {st.id} {a.id} 后用新编号重新计划并 prep")

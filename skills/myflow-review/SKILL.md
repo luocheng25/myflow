@@ -15,7 +15,9 @@ description: >-
 
 ## 只能改
 - task.json `doc.paths` 下的 .md / .rst（入口文档 `doc.entry` 在其中），以及卡片 `<task_dir>/milestones/<M>/card.md`；
-- `tests.paths` 下受 `scope.protect` 保护的用例文件（其中的性能测试区域与 bench 除外）。
+- `tests.paths` 下受 `scope.protect` 保护的用例文件（其中的性能测试区域与 bench 除外）。兼作 bench 的测试文件：可以改用例
+  和只给用例用的顶层定义；末尾的性能测试区域、它用到的顶层 import / 常量 / 函数、模块级语句不能改，
+  新用例不要放到性能测试区域之后（mf 记录时会拒绝；用例要的新常量 / import 另起名字，或写在用例函数里）。
 
 不改 kernel / 运行时代码，不改 bench（含测试文件里的性能测试区域）。发现代码 bug：不修，写进“已知问题”，并在结果最前面告诉编排者。
 
@@ -47,9 +49,11 @@ description: >-
 
 **kernel 设计说明**（用户 11-22）：入口文档只放骨架；每个核心 kernel 的完整任务划分与流水线写在入口文档同目录的 `kernels.md`
 （模板 `/opt/myflow/templates/KERNELS.md`），每个 kernel 一节，写给要读 / 改 kernel 的人：
-- Triton 风格的函数（用户 11-23，≤25 行，放在每节最前）：一个 program = 一个 CTA，只写算什么（读哪些数据、怎么累加、
-  哪一步乘哪个 scale、写到哪里），搬运与排布留给流水线；文件开头「先读：Triton 风格的写法」一节统一定义记号、
-  辅助函数与各路径的 kernel 调用顺序；kernel 改了要同步改它；
+- Gluon 风格的分阶段函数（用户 11-23，≤50 行，放在每节最前；Triton 风格写不出预取、LDS / VMEM 访问等决策，不再用）：
+  一个 program = 一个 CTA，先用注释写放置（每个操作数直进 VGPR 还是经 LDS 共享 / 双缓冲）与预取距离，再按序言 / 稳态 / 收尾
+  写出加载、LDS 读写、barrier（注明它保护什么）、wave 分工和算什么；Gluon 没有的操作写成伪操作；文件开头
+  「先读：Gluon 风格的分阶段写法」一节统一定义记号、Gluon 操作、伪操作、语义函数与各路径的 kernel 调用顺序；
+  kernel 改了要同步改它，并逐块对照代码核对预取距离、barrier 位置、操作数与写出路径；
 - 任务划分表：grid、CTA（线程数）、wave、lane、K 步各负责什么数据；
 - 逐拍流水线伪代码（≤40 行）：序言、主循环每一拍、收尾的读 / 算 / 写，标出预取距离、LDS 读写与 barrier，关键行链接到代码；
   多 region 的 K 循环用 region 表（MFMA / LDS → VGPR / DMA → LDS）；

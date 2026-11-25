@@ -1398,7 +1398,7 @@ def _ms_dispatch(a):
 
 def build_parser() -> argparse.ArgumentParser:
     """Only the commands used in practice (user request 11-22). Who uses what:
-    you: status, serve, steer · orchestrator: new, set, brief, decide, freeze, ms, await, report ·
+    you: status, serve, steer, revive · orchestrator: new, set, brief, decide, freeze, ms, await, report ·
     implementers: lane, try, run, note · setup: config, install-skills, selftest · knowledge: kb"""
     p = argparse.ArgumentParser(prog="mf", description="myflow: visible, verifiable, budgeted kernel optimization")
     p.add_argument("--version", action="version", version=f"myflow {__version__}")
@@ -1533,6 +1533,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("task")
     s.add_argument("--max-min", type=float, default=180, help="return anyway after this many minutes")
     s.add_argument("--poll-s", type=float, default=60, help="seconds between checks")
+
+    from myflow import revive
+    revive.add_parser(cmd)
 
     s = cmd("report", cmd_report, "REPORT.md + final.patch from verified records, with an audit of every number; --done ends")
     s.add_argument("task")

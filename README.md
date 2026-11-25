@@ -87,12 +87,13 @@ mf 挂起的问题，agent 30 分钟内没有转达给你，会升为严重预�
 2. 用 skill `myflow-learn` 沉淀 ≤3 张经验卡。
 3. 你同意后，`mf report <任务> --done`。
 
-## 命令（19 个；`mf <cmd> -h` 看参数）
+## 命令（20 个；`mf <cmd> -h` 看参数）
 | 谁用 | 命令 | 用途 |
 |---|---|---|
 | 你 | `status [任务] [M3\|A7] [--lane L]` | 总览 / 任务 / 里程碑 / 尝试 / lane |
 | | `serve` | 网页看板：渲染 Markdown、批准问题、留言 |
 | | `steer <任务> "…" [--stop]` | 给 agent 留言；`--stop` 结束工作 |
+| | `revive start\|stop\|status\|check <任务>` | 编排会话意外停止时，由 GitHub Copilot CLI 自动接手（见下） |
 | 编排者 | `new` · `set key=value [--why]` | 建任务；改 task.json（目标、预算、范围、推送目标……，改动显示在看板） |
 | | `brief "…" [--ask] [--gate KEY]` | 向你汇报；`--ask` 提问；`--gate`：已把 mf 挂起的问题转达给你 |
 | | `decide "…" [--gate KEY\|auto] [--quote] [--default] [--delegate H]` | 记录你的答复；授权期内按默认值代决；记录授权 |
@@ -107,6 +108,13 @@ mf 挂起的问题，agent 30 分钟内没有转达给你，会升为严重预�
 | 设置 | `kb search\|new\|check` · `config` · `install-skills` · `selftest` | 经验卡；数据位置；安装 skill；自测 |
 
 退出码：0 成功 · 1 检查未通过（审计）· 2 错误 · 3 被守卫拒绝（预算、问题未答、已停止、停滞、收尾条件未满足）。
+
+**自动续跑**：编排会话可能在没完成、也没在等你的时候停掉（实例：VS Code 扩展宿主内存耗尽，聊天请求连同子 agent 一起消失）。
+`mf revive start <任务>` 起一个后台看门狗，每 5 分钟检查一次：任务未完成、未停止、没有待你回答的问题、没有进行中的 `mf run`，
+并且 60 分钟没有任何活动（mf 事件、worktree 改动、提到该任务的 VS Code 聊天记录、CLI 会话；VS Code 扩展宿主崩溃后只等 10 分钟）时，
+用 `copilot -p` 接手编排（每个任务固定一个 CLI 会话，工具自动放行、禁止直接 `git push`），并用 `mf brief` 告诉你。每天最多续跑 6 次，
+连续 2 次续跑没有进展就停下并报告。没装 Copilot CLI 时按 VS Code `copilot` 垫片的方式自动安装（npm → brew → 官方安装脚本）。
+要回到 VS Code 里继续，先 `mf revive stop --kill`；`mf revive status` 看看门狗、CLI 进程与日志，`copilot --resume <会话>` 可进入 CLI 会话查看。
 
 <details><summary>旧命令对照（11-22 精简前的写法）</summary>
 

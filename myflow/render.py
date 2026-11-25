@@ -237,7 +237,9 @@ def pct(x) -> str:
     return f"±{x:.2f}%" if x < 1 else f"±{x:.1f}%"
 
 
-def gpu_txt(g) -> str:
+def gpu_txt(g, gpus=None) -> str:
+    if gpus and len(gpus) > 1:  # a multi-GPU lease (gpu.count > 1)
+        return "GPU" + ",".join(map(str, gpus))
     return "CPU" if g is None or g == "-" else f"GPU{g}"
 
 
@@ -472,7 +474,7 @@ def ms_text(st: State, m: dict) -> str:
         for k, label in (("inc", "增量"), ("cum", "累计")):
             x = prep.get(k)
             if x:
-                L.append(f"  {label} {fx(x['speedup'])} {x['verdict']} V{x['v']} ABBA {x['pairs']} 对 {gpu_txt(x.get('gpu'))}")
+                L.append(f"  {label} {fx(x['speedup'])} {x['verdict']} V{x['v']} ABBA {x['pairs']} 对 {gpu_txt(x.get('gpu'), x.get('gpus'))}")
     for r in ("tests", "writer", "verifier", "review"):
         rec = (m.get("roles") or {}).get(r)
         if rec:
@@ -525,7 +527,7 @@ def entry_blocks(st: State, current=None, nxt=None) -> dict:
         heads, extra, legend = perf_cols(st, [c for c, _ in cases], pa, pb, ("基线", "当前"))
         # the per-case numbers stay verifiable but folded: the design document states the conclusion per tier
         perf = [f"最近的性能里程碑 {latest['id']}：相对冻结基线 {fx(cum.get('speedup'))}{vs}（mf 复核 V{cum.get('n')}："
-                f"同卡 ABBA {cum.get('pairs')} 对，{gpu_txt(cum.get('gpu'))}，噪声 {pct(cum.get('noise'))}）。", "",
+                f"同卡 ABBA {cum.get('pairs')} 对，{gpu_txt(cum.get('gpu'), cum.get('gpus'))}，噪声 {pct(cum.get('noise'))}）。", "",
                 f"<details><summary>逐 case（{len(cases)} 个，mf 生成）</summary>", "",
                 "| case | 基线 | 当前 | 累计加速 | 增量加速 |" + "".join(f" {h} |" for h in heads),
                 "|---" * (5 + len(heads)) + "|"]
@@ -551,7 +553,7 @@ def baseline_source(st: State) -> str:
     bench = " ".join(str(st.task["commands"].get("bench") or "").split())
     bench = bench if len(bench) <= 160 else bench[:157] + "…"
     return (f"基线来源（mf 记录）：{hm(fz.get('t'))} 冻结于提交 `{base[:10]}`{who}，bench 跑 {fz.get('repeats') or '—'} 次取中位数，"
-            f"{gpu_txt(fz.get('gpu'))}，噪声 {pct(fz.get('noise'))}；bench 命令 `{bench}`。"
+            f"{gpu_txt(fz.get('gpu'), fz.get('gpus'))}，噪声 {pct(fz.get('noise'))}；bench 命令 `{bench}`。"
             "对照实现与精度参考的来源见本节手写部分。")
 
 
@@ -776,7 +778,7 @@ def status_md(st: State) -> str:
     if dfl:
         L += [f"## {dfl[0]}"] + [f"- {x}" for x in dfl[1:]] + [""]
     fz = st.freeze or {}
-    base = f"{len(fz.get('baseline', {}))} cases {pct(fz.get('noise'))} · {gpu_txt(fz.get('gpu'))} · " \
+    base = f"{len(fz.get('baseline', {}))} cases {pct(fz.get('noise'))} · {gpu_txt(fz.get('gpu'), fz.get('gpus'))} · " \
            f"{str(fz.get('base', ''))[:9]}" if fz else "未冻结"
     bv, bs = st.best_verified, st.best_self
     bv_who = f"A{bv.get('attempt')} {bv.get('lane')}" if bv else ""
@@ -863,7 +865,7 @@ def text_attempt(st: State, n: int) -> str:
         if r:
             g = r.get("gate_before")
             gtxt = f" gate before/after={_gate_txt(g)}/{_gate_txt(r.get('gate_after'))}" if g else ""
-            L.append(f"  {key}: rc={r.get('rc')} {r.get('dur')}s {gpu_txt(r.get('gpu'))}{gtxt} log={_rel(st, r.get('log'))}")
+            L.append(f"  {key}: rc={r.get('rc')} {r.get('dur')}s {gpu_txt(r.get('gpu'), r.get('gpus'))}{gtxt} log={_rel(st, r.get('log'))}")
     if a.get("problems"):
         L.append("  问题: " + "; ".join(a["problems"][:8]))
     if a.get("per_case"):
@@ -876,7 +878,7 @@ def text_attempt(st: State, n: int) -> str:
     for v in [v for v in st.verifies if v.get("attempt") == n]:
         what = f"增量 V{v.get('n')}（对 {v.get('against_ms') or str(v.get('against'))[:9]}）" if v.get("against") else f"复核 V{v.get('n')}"
         L.append(f"  {what}: {STATUS_ZH.get(v.get('verdict'), v.get('verdict'))} {fx(v.get('speedup'))} "
-                 f"噪声{pct(v.get('noise'))} ABBA {v.get('pairs')} 对 {gpu_txt(v.get('gpu'))} {v.get('reason', '')}")
+                 f"噪声{pct(v.get('noise'))} ABBA {v.get('pairs')} 对 {gpu_txt(v.get('gpu'), v.get('gpus'))} {v.get('reason', '')}")
     if a.get("note"):
         L.append(f"  备注: {a['note']}")
     L.append(f"  运行目录: {_rel(st, a.get('run'))}")
@@ -1091,7 +1093,7 @@ def _attempt_details(st: State, a: dict) -> str:
         r = a.get(key)
         if r:
             g = r.get("gate_before")
-            parts.append(f"<div>{key}: rc={r.get('rc')} · {r.get('dur')}s · {gpu_txt(r.get('gpu'))}"
+            parts.append(f"<div>{key}: rc={r.get('rc')} · {r.get('dur')}s · {gpu_txt(r.get('gpu'), r.get('gpus'))}"
                          f"{(' · 门禁 ' + _gate_txt(g) + '/' + _gate_txt(r.get('gate_after'))) if g else ''} · {_link(st, r.get('log'), 'log')}</div>")
     if a.get("problems"):
         parts.append("<div class='crit'>问题：" + esc("; ".join(a["problems"][:10])) + "</div>")
@@ -1138,7 +1140,7 @@ def html_task(st: State, served: bool = False) -> str:
     bv, bs = st.best_verified, st.best_self
     b = t["budget"]
     kp = [("基线", f"{len(fz.get('baseline', {}))} cases" if fz else "未冻结",
-           f"噪声 {pct(fz.get('noise'))} · {gpu_txt(fz.get('gpu'))}" if fz else ""),
+           f"噪声 {pct(fz.get('noise'))} · {gpu_txt(fz.get('gpu'), fz.get('gpus'))}" if fz else ""),
           ("最佳·已复核", fx(bv and bv["speedup"]), f"A{bv.get('attempt')} {bv.get('lane')} · ABBA {bv.get('pairs')}对" if bv else "尚无复核"),
           ("最佳·自测", fx(bs and bs["speedup"]), f"A{bs.get('n')} {bs.get('lane')} · 未配对" if bs else ""),
           ("目标", f"{st.target:g}×", _pbar(s["progress"])),
@@ -1195,7 +1197,7 @@ def html_task(st: State, served: bool = False) -> str:
                        f"{(' <b>增量</b> 对 ' + esc(v.get('against_ms') or str(v.get('against'))[:9])) if v.get('against') else ''}</td>"
                        f"<td><span class='tag {esc(v.get('verdict'))}'>{esc(STATUS_ZH.get(v.get('verdict'), v.get('verdict')))}</span></td>"
                        f"<td class='num'><b>{fx(v.get('speedup'))}</b></td><td class='num'>{'' if v.get('against') else fx(v.get('claim'))}</td>"
-                       f"<td class='num'>{pct(v.get('noise'))}</td><td>{v.get('pairs')}对 {gpu_txt(v.get('gpu'))}</td>"
+                       f"<td class='num'>{pct(v.get('noise'))}</td><td>{v.get('pairs')}对 {gpu_txt(v.get('gpu'), v.get('gpus'))}</td>"
                        f"<td>{esc(v.get('reason', ''))} {_link(st, v.get('run'), 'run')}</td></tr>" for v in st.verifies[::-1])
         body.append("<div class='card'><h2>独立复核（干净 worktree + 同卡 ABBA；默认对照冻结基线，“增量”对照上一里程碑）</h2><table><tr><th>#</th><th>时间</th>"
                     "<th>对象</th><th>结论</th><th class='num'>复核</th><th class='num'>自测</th><th class='num'>噪声</th><th>方式</th>"

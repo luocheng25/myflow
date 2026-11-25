@@ -50,7 +50,9 @@ DEFAULTS = {
     "parse": {"mode": "mf"},
     "env": {},
     "scope": {"allow": [], "protect": []},
-    "gpu": {"pool": "auto", "max_use": 5, "max_vram": 20, "gate": "strict", "env": "HIP_VISIBLE_DEVICES", "wait_s": 3600},
+    # count > 1: that many GPUs leased together for one job (multi-GPU TP), all or nothing, always exclusive
+    "gpu": {"pool": "auto", "count": 1, "max_use": 5, "max_vram": 20, "gate": "strict", "env": "HIP_VISIBLE_DEVICES",
+            "wait_s": 3600},
     "budget": {
         "max_attempts": 40,
         "max_hours": 24.0,

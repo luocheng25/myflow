@@ -357,16 +357,17 @@ def _bench(st: State, ctx: dict, cmd_key: str, lease: Lease, out_dir: Path, time
     cmd = t["commands"].get(cmd_key)
     if not cmd:
         raise MfError(f"commands.{cmd_key} is empty")
-    ctx = dict(ctx, gpu=lease.gpu, run=str(out_dir))
+    ctx = dict(ctx, **lease.gpu_fields(), run=str(out_dir))
     out_dir.mkdir(parents=True, exist_ok=True)
     env = build_env(t, ctx)
-    before = gate_snapshot(lease.gpu, t["gpu"])
+    target = lease.gpus if len(lease.gpus) > 1 else lease.gpu  # a multi-GPU lease gates every GPU
+    before = gate_snapshot(target, t["gpu"])
     hook_rc = None
     if t["commands"].get("gate"):
         hook_rc = run_cmd(expand(t["commands"]["gate"], ctx), ctx["wt"], env, out_dir / "gate.log", 120)["rc"]
     res = run_cmd(expand(cmd, ctx), ctx["wt"], env, out_dir / "out.log", timeout, purge=True)
-    after = gate_snapshot(lease.gpu, t["gpu"], after=True)
-    res.update(gpu=lease.gpu, gate_before=before, gate_after=after, gate_hook_rc=hook_rc,
+    after = gate_snapshot(target, t["gpu"], after=True)
+    res.update(**lease.gpu_fields(), gate_before=before, gate_after=after, gate_hook_rc=hook_rc,
                gate_ok=gate_passes(before) and gate_passes(after) and hook_rc in (None, 0))
     try:
         text = Path(res["log"]).read_text(encoding="utf-8", errors="replace")
@@ -378,7 +379,8 @@ def _bench(st: State, ctx: dict, cmd_key: str, lease: Lease, out_dir: Path, time
 
 
 def _slim(res: dict) -> dict:
-    keep = ("rc", "dur", "timeout", "log", "gpu", "gate_before", "gate_after", "gate_ok", "gate_hook_rc", "parse_error")
+    keep = ("rc", "dur", "timeout", "log", "gpu", "gpus", "gate_before", "gate_after", "gate_ok", "gate_hook_rc",
+            "parse_error")
     return {k: res[k] for k in keep if k in res}
 
 
@@ -388,9 +390,9 @@ def _correctness(st: State, ctx: dict, wt, out: Path, timeout: int, key: str = "
         raise MfError(f"commands.{key} is empty: correctness must be defined before any measurement")
     with Lease(_pool(st), exclusive=False, who=_who(st, ctx["lane"], key), gpu_cfg=st.task["gpu"],
                wait_s=st.task["gpu"].get("wait_s", 3600)) as L:
-        c = dict(ctx, gpu=L.gpu)
+        c = dict(ctx, **L.gpu_fields())
         res = run_cmd(expand(cmd, c), wt, build_env(st.task, c), out / "out.log", timeout, purge=True)
-        res["gpu"] = L.gpu
+        res.update(L.gpu_fields())
     return res
 
 
@@ -440,7 +442,7 @@ def cmd_freeze(a):
                 if b["rc"] != 0 or b["timeout"]:
                     raise MfError(f"bench failed on baseline (rc={b['rc']}): {b['log']}\n{tail(b['log'])}")
                 if not b["gate_ok"]:
-                    raise MfError(f"GPU{L.gpu} not idle during baseline run {i + 1} "
+                    raise MfError(f"{render.gpu_txt(L.gpu, L.gpus)} not idle during baseline run {i + 1} "
                                   f"(before={b['gate_before']}, after={b['gate_after']}); raw kept in {run_dir}")
                 if not b["metrics"]:
                     raise MfError(f"no metrics parsed from {b['log']} (parse={t['parse']}).\n{tail(b['log'])}")
@@ -448,19 +450,20 @@ def cmd_freeze(a):
             if t["commands"].get("bench_quick"):
                 q = _bench(st, ctx, "bench_quick", L, run_dir / "quick", timeout)
                 quick = q["metrics"] if q["rc"] == 0 and q["gate_ok"] else None
-            gpu = L.gpu
+            where = L.gpu_fields()
     finally:
         append_event(tdir, "run.end", "", by="mf", run=run_dir.name)
     med, noise = combine_runs(runs)
     append_event(tdir, "freeze", f"基线 {base[:10]}：{len(med)} cases，噪声 {render.pct(noise)}", by="mf",
                  base=base, protect=protect, contract=contract_hash(t), goalposts=goalposts(t), baseline=med,
                  parse=t["parse"], metric={k: t["metric"][k] for k in ("direction", "aggregate", "weights") if k in t["metric"]},
-                 baseline_quick=quick, noise=noise, runs=runs, gpu=gpu, repeats=a.repeats, run=str(run_dir),
+                 baseline_quick=quick, noise=noise, runs=runs, **where, repeats=a.repeats, run=str(run_dir),
                  correctness_log=c["log"])
     st = State(tdir)
     if st.phase in ("spec", "bootstrap") and st.gate_ok("spec", 1):
         append_event(tdir, "phase", "基线已冻结", by="mf", phase="freeze", round=1)
-    print(f"frozen {st.id} @ {base[:10]} on {render.gpu_txt(gpu)}: {len(med)} cases, noise {render.pct(noise)}")
+    print(f"frozen {st.id} @ {base[:10]} on {render.gpu_txt(where['gpu'], where.get('gpus'))}: {len(med)} cases, "
+          f"noise {render.pct(noise)}")
     for c_, v in list(med.items())[:12]:
         print(f"  {render.pad(c_, 40)} {v:g} {t['metric'].get('name', '')}")
     gaps = render.sweep_gaps(med) if (t.get("perf") or {}).get("sweep", True) else []
@@ -656,7 +659,7 @@ def _try_locked(a, st: State, ln: dict, kind: str):
         r = data.get(key)
         if r:
             g = r.get("gate_before")
-            print(f"  {key}: rc={r['rc']} {r['dur']}s {render.gpu_txt(r.get('gpu'))}"
+            print(f"  {key}: rc={r['rc']} {r['dur']}s {render.gpu_txt(r.get('gpu'), r.get('gpus'))}"
                   + (f" 门禁 {render._gate_txt(g)}/{render._gate_txt(r.get('gate_after'))}" if g else "")
                   + f"  log: {r['log']}")
             if r["rc"] != 0 or r.get("timeout"):
@@ -732,7 +735,7 @@ def _verify_locked(a, st: State, ln: dict, at: dict, commit: str, base: str, aga
             fz_gpu = st.freeze.get("gpu")
             with Lease(_pool(st), exclusive=True, who=_who(st, a.lane, "verify"), gpu_cfg=t["gpu"],
                        prefer=a.gpu if a.gpu is not None else fz_gpu, wait_s=t["gpu"].get("wait_s", 3600)) as L:
-                data["gpu"] = L.gpu
+                data.update(L.gpu_fields())
                 for i, arm in enumerate(abba_order(pairs)):
                     ctx = ctx_a if arm == "A" else ctx_b
                     r = _bench(st, ctx, "bench", L, run_dir / f"{i + 1:02d}{arm}", timeout)
@@ -742,7 +745,8 @@ def _verify_locked(a, st: State, ln: dict, at: dict, commit: str, base: str, aga
                         verdict, reason = ("timeout" if r["timeout"] else "error"), f"bench {arm} rc={r['rc']} ({r['log']})"
                         break
                     if not r["gate_ok"]:
-                        verdict, reason = "gate_failed", f"GPU{L.gpu} busy at run {i + 1}{arm}: {r['gate_before']} / {r['gate_after']}"
+                        verdict, reason = "gate_failed", (f"{render.gpu_txt(L.gpu, L.gpus)} busy at run {i + 1}{arm}: "
+                                                          f"{r['gate_before']} / {r['gate_after']}")
                         break
                     (a_runs if arm == "A" else b_runs).append(r["metrics"])
             atomic_write(run_dir / "abba.json", json.dumps({"order": abba_order(pairs), "arms": arms}, indent=1))
@@ -805,7 +809,8 @@ def _record_verify(st: State, lane, at: dict, data: dict, verdict, reason, again
     what = f"增量（对 {against_ms or against[:9]}）" if against else "复核"
     how = f"三方交替 {data.get('pairs')} 轮" if data.get("arms") == 3 else f"ABBA {data.get('pairs')} 对"
     print(f"V{ev['data']['n']} A{at.get('n')} [{lane}] {render.STATUS_ZH.get(verdict, verdict)}  "
-          f"{what} {render.fx(data.get('speedup'))}（{how}，{render.gpu_txt(data.get('gpu'))}，噪声 {render.pct(data.get('noise'))}）"
+          f"{what} {render.fx(data.get('speedup'))}（{how}，{render.gpu_txt(data.get('gpu'), data.get('gpus'))}，"
+          f"噪声 {render.pct(data.get('noise'))}）"
           + ("" if against else f"  自测 {render.fx(data.get('claim'))}{'  ⚠ 自测未复现' if data.get('mismatch') else ''}"))
     if reason:
         print(f"  {reason}")
@@ -868,7 +873,7 @@ def _verify3_locked(a, st: State, ln: dict, at: dict, commit: str, base: str, pr
         if verdict is None:
             with Lease(_pool(st), exclusive=True, who=_who(st, a.lane, "verify"), gpu_cfg=t["gpu"],
                        prefer=a.gpu if a.gpu is not None else st.freeze.get("gpu"), wait_s=t["gpu"].get("wait_s", 3600)) as L:
-                common["gpu"] = L.gpu
+                common.update(L.gpu_fields())
                 for i, arm in enumerate(order):
                     r = _bench(st, ctx[arm], "bench", L, run_dir / f"{i + 1:02d}{arm}", timeout)
                     arms.append({"arm": arm, "log": r["log"], "metrics": r["metrics"], "gate_ok": r["gate_ok"],
@@ -877,7 +882,8 @@ def _verify3_locked(a, st: State, ln: dict, at: dict, commit: str, base: str, pr
                         verdict, reason = ("timeout" if r["timeout"] else "error"), f"bench {arm} rc={r['rc']} ({r['log']})"
                         break
                     if not r["gate_ok"]:
-                        verdict, reason = "gate_failed", f"GPU{L.gpu} busy at run {i + 1}{arm}: {r['gate_before']} / {r['gate_after']}"
+                        verdict, reason = "gate_failed", (f"{render.gpu_txt(L.gpu, L.gpus)} busy at run {i + 1}{arm}: "
+                                                          f"{r['gate_before']} / {r['gate_after']}")
                         break
                     runs[arm].append(r["metrics"])
             atomic_write(run_dir / "abba.json", json.dumps({"order": order, "arms": arms}, indent=1))
@@ -920,17 +926,22 @@ def cmd_run(a):
     run_dir = _run_dir(st, lane, "run")
     timeout = _timeout(st, a)
     pool = None if a.gpu == "none" else ([int(a.gpu)] if a.gpu not in (None, "auto") else _pool(st))
+    prefer = None
+    if pool and a.gpu not in (None, "auto") and st.task["gpu"].get("count", 1) != 1:
+        prefer = pool[0]  # multi-GPU task: --gpu N is the first choice, the other GPUs come from the pool
+        pool = [prefer] + [g for g in (_pool(st) or []) if g != prefer]
     append_event(tdir, "run.start", f"run: {cmd[:80]}", lane=a.lane, by="mf", run=run_dir.name, timeout=timeout)
     try:
         with Lease(pool, exclusive=a.exclusive or a.machine_exclusive, machine="excl" if a.machine_exclusive else "shared",
-                   who=_who(st, lane, "run"), gpu_cfg=st.task["gpu"], wait_s=st.task["gpu"].get("wait_s", 3600)) as L:
-            ctx = _ctx(st, lane, wt, run_dir, gpu=L.gpu)
+                   who=_who(st, lane, "run"), gpu_cfg=st.task["gpu"], prefer=prefer,
+                   wait_s=st.task["gpu"].get("wait_s", 3600)) as L:
+            ctx = dict(_ctx(st, lane, wt, run_dir), **L.gpu_fields())
             r = run_cmd(expand(cmd, ctx), wt, build_env(st.task, ctx), run_dir / "out.log", timeout, purge=bool(a.lane))
     finally:
         append_event(tdir, "run.end", "", lane=a.lane, by="mf", run=run_dir.name)
     append_event(tdir, "note", a.title or f"run: {cmd[:100]}", lane=a.lane, by="mf", kind="run",
-                 file=r["log"], rc=r["rc"], dur=r["dur"], gpu=L.gpu)
-    print(f"rc={r['rc']} {r['dur']}s {render.gpu_txt(L.gpu)}{' TIMEOUT' if r['timeout'] else ''}  log: {r['log']}")
+                 file=r["log"], rc=r["rc"], dur=r["dur"], **L.gpu_fields())
+    print(f"rc={r['rc']} {r['dur']}s {render.gpu_txt(L.gpu, L.gpus)}{' TIMEOUT' if r['timeout'] else ''}  log: {r['log']}")
     print(tail(r["log"], a.tail))
     _after(tdir, a.lane)
     return 0 if r["rc"] == 0 else 1
@@ -1161,6 +1172,7 @@ def gpu_lines() -> list:
         s = snap.get(g, {})
         hs = [h for h in holders if h["gpu"] == g]
         who = "; ".join(f"{'EXCL' if h['exclusive'] else 'shared'} {h['who']} pid{h['pid']} {render.age(time.time() - (h['since'] or time.time()))}"
+                        + (f" [{len(h['gpus'])}-GPU lease {','.join(map(str, h['gpus']))}]" if h.get("gpus") else "")
                         for h in hs)
         out.append(f"GPU{g}: use {s.get('use', '?')}% vram {s.get('vram', '?')}%  {who or 'free'}")
     return out
@@ -1186,7 +1198,7 @@ def cmd_report(a):
         cs = render.case_order(final.get("per_case", {}))
         heads, extra, legend = render.perf_cols(st, cs, *render.verify_perf(st, final))
         L += [f"**{render.fx(final['speedup'])}**（A{final.get('attempt')} [{final.get('lane')}]，提交 `{final['commit'][:12]}`，"
-              f"ABBA {final.get('pairs')} 对，{render.gpu_txt(final.get('gpu'))}，噪声 {render.pct(final.get('noise'))}，结论 {final.get('verdict')}）", "",
+              f"ABBA {final.get('pairs')} 对，{render.gpu_txt(final.get('gpu'), final.get('gpus'))}，噪声 {render.pct(final.get('noise'))}，结论 {final.get('verdict')}）", "",
               "| case | 基线 µs | 新 µs | 加速 | 噪声 |" + "".join(f" {h} |" for h in heads), "|---" * (5 + len(heads)) + "|"]
         for c in cs:
             d = final["per_case"][c]
@@ -1203,7 +1215,7 @@ def cmd_report(a):
         cs = render.case_order(fz["baseline"])
         heads, extra, legend = render.perf_cols(st, cs, {}, render.freeze_perf(st), ("基线", "当前"))
         L += [f"本冻结轮次（`{fz['base'][:10]}`）还没有复核过的候选；下表是冻结基线（当前代码）的逐 case 数据"
-              f"（bench {fz.get('repeats') or '—'} 次中位，{render.gpu_txt(fz.get('gpu'))}，噪声 {render.pct(fz.get('noise'))}）。", "",
+              f"（bench {fz.get('repeats') or '—'} 次中位，{render.gpu_txt(fz.get('gpu'), fz.get('gpus'))}，噪声 {render.pct(fz.get('noise'))}）。", "",
               "| case | 当前 µs |" + "".join(f" {h} |" for h in heads), "|---" * (2 + len(heads)) + "|"]
         L += [f"| {c} | {fz['baseline'][c]:g} |" + "".join(f" {x} |" for x in extra[c]) for c in cs]
         L += (["", legend] if legend else []) + [""]

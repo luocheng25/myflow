@@ -374,8 +374,8 @@ def _vsum(v) -> dict:
     if not v:
         return None
     return {"v": v.get("n"), "speedup": v.get("speedup"), "verdict": v.get("verdict"), "noise": v.get("noise"),
-            "pairs": v.get("pairs"), "gpu": v.get("gpu"), "regressed": v.get("regressed") or [],
-            "against_ms": v.get("against_ms")}
+            "pairs": v.get("pairs"), "gpu": v.get("gpu"), **({"gpus": v["gpus"]} if v.get("gpus") else {}),
+            "regressed": v.get("regressed") or [], "against_ms": v.get("against_ms")}
 
 
 def _size(st: State, parent: str, candidate: str, pins: dict) -> dict:
@@ -559,7 +559,7 @@ def perf_line(st: State, prep: dict) -> str:
 
     def how(x, verdict=True):
         v = (VERDICT_ZH.get(x["verdict"], x["verdict"]) if zh else x["verdict"]) if verdict else ""
-        gpu = render.gpu_txt(x.get("gpu"))
+        gpu = render.gpu_txt(x.get("gpu"), x.get("gpus"))
         if zh:
             return f"{v + '，' if v else ''}V{x['v']}，同卡 ABBA {x['pairs']} 对，{gpu}"
         return f"{v + ', ' if v else ''}V{x['v']}, ABBA {x['pairs']} pairs, {gpu}"

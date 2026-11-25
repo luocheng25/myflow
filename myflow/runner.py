@@ -38,7 +38,7 @@ def build_env(task: dict, ctx: dict) -> dict:
                 "MF_WT": str(ctx.get("wt", ""))})
     gpu_env = task["gpu"].get("env") or "HIP_VISIBLE_DEVICES"
     if ctx.get("gpu") is not None:
-        env[gpu_env] = str(ctx["gpu"])
+        env[gpu_env] = ",".join(map(str, ctx["gpus"])) if ctx.get("gpus") else str(ctx["gpu"])
         if gpu_env != "CUDA_VISIBLE_DEVICES":
             env.pop("CUDA_VISIBLE_DEVICES", None)  # HIP composes both variables; keep a single source of truth
     return env
@@ -193,13 +193,20 @@ class Lease:
 
     machine="shared" for ordinary jobs; "excl" for profilers that perturb every GPU (PMC disables PTL
     and locks clocks machine-wide), so they wait for running timings and block new ones.
+    gpu_cfg["count"] = N > 1 (multi-GPU jobs such as TP under torchrun): N distinct GPUs, all or nothing, always
+    exclusive; .gpu stays the first (lowest) one, .gpus lists all of them.
     Locks are released by the kernel when the process dies, so leases can never go stale.
     """
 
     def __init__(self, pool, exclusive=True, machine="shared", wait_s=3600, who="", prefer=None, gpu_cfg=None):
         self.pool, self.exclusive, self.machine, self.wait_s = pool, exclusive, machine, wait_s
         self.who, self.prefer, self.cfg = who, prefer, gpu_cfg or {}
-        self.gpu, self._g, self._m, self._holder = None, None, None, None
+        self.count = self.cfg.get("count", 1)
+        if isinstance(self.count, bool) or not isinstance(self.count, int) or self.count < 1:
+            raise MfError(f"gpu.count must be a positive integer, got {self.count!r}")
+        if self.count > 1:
+            self.exclusive = True  # the ranks spin on each other: every GPU of the job must be whole
+        self.gpu, self.gpus, self._fhs, self._holders, self._m = None, [], [], [], None
 
     def _order(self) -> list:
         pool = list(self.pool)
@@ -214,12 +221,16 @@ class Lease:
         return sorted(pool, key=score)
 
     def __enter__(self):
+        if self.count > 1 and self.pool is not None and self.count > len(set(self.pool)):
+            raise MfError(f"gpu.count={self.count} but pool {self.pool} has only {len(set(self.pool))} GPUs")
         deadline = time.time() + self.wait_s
         self._m = open(lock_dir() / "machine.lock", "a+")
         mmode = fcntl.LOCK_EX if self.machine == "excl" else fcntl.LOCK_SH
         _flock_wait(self._m, mmode, deadline, "the machine lock (a machine-exclusive job such as PMC is running)")
         if self.pool is None:
             return self
+        if self.count > 1:
+            return self._enter_many(deadline)
         mode = fcntl.LOCK_EX if self.exclusive else fcntl.LOCK_SH
         told = False
         while True:
@@ -230,10 +241,7 @@ class Lease:
                 except BlockingIOError:
                     fh.close()
                     continue
-                self.gpu, self._g = g, fh
-                self._holder = lock_dir() / f"gpu{g}.{'x' if self.exclusive else 's'}.{os.getpid()}.json"
-                self._holder.write_text(json.dumps({"pid": os.getpid(), "who": self.who, "since": time.time(),
-                                                    "exclusive": self.exclusive}))
+                self._hold([(g, fh)])
                 return self
             if time.time() > deadline:
                 raise MfError(f"no GPU in pool {self.pool} became free within {self.wait_s}s (see: mf status)")
@@ -242,16 +250,63 @@ class Lease:
                 told = True
             time.sleep(3)
 
+    def _enter_many(self, deadline):
+        """The best `count` GPUs by _order() (those mf records as leased go last), locked in ascending order without
+        waiting; any miss releases them all before retrying, so this never deadlocks with other leases."""
+        told = False
+        while True:
+            taken = {h["gpu"] for h in lease_holders()}
+            order = list(dict.fromkeys(self._order()))
+            pick = sorted(([g for g in order if g not in taken] + [g for g in order if g in taken])[:self.count])
+            held = []
+            for g in pick:
+                fh = open(lock_dir() / f"gpu{g}.lock", "a+")
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    fh.close()
+                    break
+                held.append((g, fh))
+            if len(held) == self.count:
+                self._hold(held)
+                return self
+            for _, fh in held:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+                fh.close()
+            if time.time() > deadline:
+                self.__exit__()
+                raise MfError(f"{self.count} GPUs of pool {self.pool} were not free together within {self.wait_s}s "
+                              "(see: mf status)")
+            if not told:
+                print(f"[mf] waiting for {self.count} GPUs of pool {self.pool} to be free together ...",
+                      file=sys.stderr, flush=True)
+                told = True
+            time.sleep(3)
+
+    def _hold(self, held: list) -> None:
+        """Keep the locks of [(gpu, fh)] and write one holder record per GPU for `mf status`."""
+        self.gpus, self._fhs = [g for g, _ in held], [fh for _, fh in held]
+        self.gpu = self.gpus[0]
+        info = {"pid": os.getpid(), "who": self.who, "since": time.time(), "exclusive": self.exclusive}
+        if len(self.gpus) > 1:
+            info["gpus"] = self.gpus
+        for g in self.gpus:
+            p = lock_dir() / f"gpu{g}.{'x' if self.exclusive else 's'}.{os.getpid()}.json"
+            p.write_text(json.dumps(info))
+            self._holders.append(p)
+
+    def gpu_fields(self) -> dict:
+        """Fields for ctx and records: "gpu" is the first GPU (int) as before; "gpus" only for multi-GPU leases."""
+        return {"gpu": self.gpu, "gpus": list(self.gpus)} if len(self.gpus) > 1 else {"gpu": self.gpu}
+
     def __exit__(self, *_exc):
-        if self._holder:
-            try:
-                self._holder.unlink()
-            except FileNotFoundError:
-                pass
-        for fh in (self._g, self._m):
+        for p in self._holders:
+            p.unlink(missing_ok=True)
+        for fh in self._fhs + [self._m]:
             if fh:
                 fcntl.flock(fh, fcntl.LOCK_UN)
                 fh.close()
+        self._holders, self._fhs, self._m = [], [], None
         return False
 
 
@@ -274,15 +329,17 @@ def lease_holders() -> list:
         except (OSError, json.JSONDecodeError):
             info = {}
         out.append({"gpu": int(m.group(1)), "exclusive": m.group(2) == "x", "pid": pid,
-                    "who": info.get("who", ""), "since": info.get("since")})
+                    "who": info.get("who", ""), "since": info.get("since"), "gpus": info.get("gpus")})
     return out
 
 
 def gate_snapshot(gpu, cfg: dict, after: bool = False) -> dict:
-    """Idle check of one GPU. ok: True idle / False busy / None unknown."""
+    """Idle check of one GPU, or of all GPUs of a multi-GPU lease (list). ok: True idle / False busy / None unknown."""
     mode = cfg.get("gate", "strict")
     if gpu is None or mode == "off":
         return {"ok": True, "mode": mode, "detail": "cpu" if gpu is None else "gate off"}
+    if isinstance(gpu, (list, tuple)):
+        return _gate_all(list(gpu), cfg, mode, after)
     snap = None
     for i in range(3 if after else 1):  # our own job may still be draining right after it exits
         if i:
@@ -296,6 +353,32 @@ def gate_snapshot(gpu, cfg: dict, after: bool = False) -> dict:
         return {"ok": None, "mode": mode, "detail": "telemetry unavailable"}
     ok = snap["use"] <= cfg.get("max_use", 5) and (snap.get("vram") or 0) <= cfg.get("max_vram", 20)
     return {"ok": ok, "mode": mode, "use": snap["use"], "vram": snap.get("vram")}
+
+
+def _gate_all(gpus: list, cfg: dict, mode: str, after: bool) -> dict:
+    """Busy if any GPU is busy, else unknown if any is unknown; use/vram = the worst one, "gpus" = each one."""
+
+    def idle(s):
+        return s["use"] <= cfg.get("max_use", 5) and (s.get("vram") or 0) <= cfg.get("max_vram", 20)
+
+    per = []
+    for i in range(3 if after else 1):  # our own job may still be draining right after it exits
+        if i:
+            time.sleep(1.5)
+        snap = smi_snapshot() or {}
+        per = [{"gpu": g, "use": (snap.get(g) or {}).get("use"), "vram": (snap.get(g) or {}).get("vram")}
+               for g in gpus]
+        if any(p["use"] is None for p in per) or all(idle(p) for p in per):
+            break
+    known = [p for p in per if p["use"] is not None]
+    ok = False if any(not idle(p) for p in known) else (True if len(known) == len(per) else None)
+    out = {"ok": ok, "mode": mode}
+    if known:
+        out.update(use=max(p["use"] for p in known), vram=max(p["vram"] or 0 for p in known))
+    if ok is None:
+        out["detail"] = "telemetry unavailable"
+    out["gpus"] = per
+    return out
 
 
 def gate_passes(snap: dict) -> bool:

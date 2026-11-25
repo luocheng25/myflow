@@ -42,7 +42,9 @@
     "ignore": []
   },
   "gpu": {
+    "_doc": "count: GPUs per job (default 1). N > 1 (multi-GPU TP jobs): N distinct GPUs of the pool are leased together, all or nothing, always exclusive (correctness too); the idle gate checks every one of them and env gets the ascending list, e.g. 0,1,2,3.",
     "pool": "0-7",
+    "count": 1,
     "max_use": 5,
     "max_vram": 20,
     "gate": "strict",

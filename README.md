@@ -161,7 +161,7 @@ mf 挂起的问题，agent 30 分钟内没有转达给你，会升为严重预�
 "commands": {"correctness": "...", "bench": "... 打印 MF_METRIC case=<c> value=<v>", "bench_quick": "", "verify_extra": "", "gate": "", "setup": ""}
 "scope":    {"allow": ["aiter/ops/flydsl/**"], "protect": ["op_tests/test_x.py", "bench.py"]}
 "env":      {"FLYDSL_RUNTIME_CACHE_DIR": "{lane_dir}/cache/flydsl", "TMPDIR": "{lane_dir}/tmp", "PYTHONPATH": "{wt}"}
-"gpu":      {"pool": "0-7", "gate": "strict", "max_use": 5, "max_vram": 20}
+"gpu":      {"pool": "0-7", "count": 1, "gate": "strict", "max_use": 5, "max_vram": 20}   // count>1：多卡作业一次租 count 张（全有或全无、一律独占），env 为升序列表如 0,1,2,3
 "budget":   {"max_attempts": 40, "max_hours": 24, "max_no_improve": 10, "max_fail_streak": 4, "heartbeat_min": 30, "report_min": 60, "spin_min": 120, "timeout_s": 1800}
 "verify":   {"pairs": 4}   "gates": {"spec": "ask", "plan": "ask"}   "survey": {"repos": ["/opt/aiter", "/opt/lc/FlyDSL"]}
 "git":      {"url": "https://github.com/<you>/<repo>.git", "branch": "<you>/<task>", "push": "first-ask", "lang": "en"}   // 仓库是 pyhip 时 mf new 自动设为 zh

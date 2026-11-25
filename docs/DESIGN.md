@@ -73,7 +73,7 @@ myflow 的取舍：**把 GEAK 的“可信执行”机制压缩成一个 stdlib 
 ## 5. 问题 4：并行
 - lane = `mf/<task>/<lane>` 分支 + 独立 worktree + 独立 `{lane_dir}`（缓存、TMPDIR）；同一 lane 同时只允许一个 try/verify（文件锁，冲突直接拒绝）。
 - 复核：每条 lane 独立的干净 worktree；基线 worktree 只读共享。
-- GPU 租约（flock，进程死了锁自动释放，不会残留）：计时 = 独占一张卡；正确性 = 共享；PMC 等 = 全机独占（等待正在进行的计时，阻止新计时）。
+- GPU 租约（flock，进程死了锁自动释放，不会残留）：计时 = 独占一张卡；正确性 = 共享；PMC 等 = 全机独占（等待正在进行的计时，阻止新计时）。多卡作业（TP，`gpu.count`=N>1）一次租 N 张：按升序不等待地试锁，凑不齐就全部释放后重试（全有或全无，不会与别的租约死锁），一律独占（正确性也是），门禁查全部 N 张，`gpu.env` 为升序列表；记录里 `gpu` 仍是首卡，另有 `gpus`。
 - 多任务：每个任务独立目录与事件日志，全局 `registry.json` 汇总到 L0；多用户共享一台机器时设 `MYFLOW_LOCK_DIR` 为公共目录。
 - 派发子 agent 由你用的 agent 运行时负责（Copilot / Claude Code 的后台子 agent 或多个终端），myflow 只提供 brief、隔离与记录，因此不绑定任何运行时。
 

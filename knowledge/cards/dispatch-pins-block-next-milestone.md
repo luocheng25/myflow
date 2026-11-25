@@ -4,7 +4,7 @@ kind: pitfall
 summary: 复核把当前分派表的确切交界钉进受保护的测试文件，而并行 lane 正在改分派表时，下一个里程碑的 prep 一定挂在 verify_extra 上（lane 不能改用例）；收尾前先拿复核后的用例在下一个候选上预检，只钉两版都成立的交界
 applies: myflow 任务（单一受保护测试文件、scope.protect 按整文件哈希），带按形状 / M 分派表的算子（GEMM、MoE、attention 分档），流水线并行的多里程碑
 confidence: high
-evidence: task gemm-a8w4：M3 prep 两次失败（M1/M2 复核加的 7 个分派用例写死旧交界，int3 改用例被判 oracle_modified）→ 插入维护里程碑 M8 去耦；M3 复核钉的 tp4_qkvz 512|513 在 M7 候选上挂（runs/20261124-161527-_task-run-53ea）→ 改为两侧钉，M7 复核再钉 1024|1025；task moe-ptpc-a8w4-r2 M16 复核按此预先只钉两版都成立的交界（H5120 decode 上限 64→32 留给 M17），M17 prep 的 verify_extra 133 例一次通过
+evidence: task gemm-a8w4（R4 又遇到三次：M14 前 test_1x32_compile_cache 钉住配置挡住 L15 的快 14% 配置；int13 把 tp4_o 交界提到 24 与 M15 版 tile_switches[tp4_o_m21] 冲突而回退；int13 从 int15 头部出发，M13 prep 被拒“不是从 M15 或其候选出发”）；M3 prep 两次失败（M1/M2 复核加的 7 个分派用例写死旧交界，int3 改用例被判 oracle_modified）→ 插入维护里程碑 M8 去耦；M3 复核钉的 tp4_qkvz 512|513 在 M7 候选上挂（runs/20261124-161527-_task-run-53ea）→ 改为两侧钉，M7 复核再钉 1024|1025；task moe-ptpc-a8w4-r2 M16 复核按此预先只钉两版都成立的交界（H5120 decode 上限 64→32 留给 M17），M17 prep 的 verify_extra 133 例一次通过
 source: gemm-a8w4 (2026-11)
 ---
 **症状**：上一个里程碑刚收尾，下一个里程碑 prep 时 verify_extra 挂在“M=x 应走 kernel A”这类用例上。lane 或集成 lane 去改用例会被判 oracle_modified（受保护文件按整文件哈希比对），只有收尾复核能改用例。
@@ -15,6 +15,8 @@ source: gemm-a8w4 (2026-11)
 - 分派用例只核对“实际 launch == 公开的 kernel_names 预测”，再按 kernel 名前缀判档位，不比对完整核名和私有常量；
 - 收尾前，用复核后的测试文件在下一个候选的代码上跑一遍：建 scratch worktree，拷入测试文件。哪一行挂了，就只钉两版都成立的两侧，确切交界留给移动它的那个里程碑复核再钉；
 - 已经卡住：插入不带 lane 的维护里程碑，由复核去耦用例，并在两版代码上都跑通，然后从该里程碑重建集成 lane；
+- 并行 lane 的轮次：每个中间里程碑的复核只核对“launch == kernel_names 预测”，交界统一由本轮最后一个改分派的里程碑复核钉回（gemm-a8w4 R4 的 M13 一次钉 15 处）；
+- 集成 lane 要从里程碑提交（或正在收尾的候选）出发：里程碑提交是快照、不带 lane 历史，从更早的集成头部出发的候选会被 prep 拒绝；手工补救时 `git merge` 冲突按“代码取 lane、文档与用例取里程碑”解决，并逐字节核对两边；集成 lane 没有 mf try 尝试，不能被 `--merge` 引用。
 - lane 起点要能回溯到最新的已收尾里程碑，否则 mf 用旧里程碑的测试文件当 oracle，合并新测试文件就会被误判。
 
 **怎么验证**：`git worktree add --detach <scratch> <next-candidate>`；把复核后的测试文件拷进去；用 `pytest -m "not basic"` 跑，应全部通过。

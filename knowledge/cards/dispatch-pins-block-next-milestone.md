@@ -4,7 +4,7 @@ kind: pitfall
 summary: 复核把当前分派表的确切交界钉进受保护的测试文件，而并行 lane 正在改分派表时，下一个里程碑的 prep 一定挂在 verify_extra 上（lane 不能改用例）；收尾前先拿复核后的用例在下一个候选上预检，只钉两版都成立的交界
 applies: myflow 任务（单一受保护测试文件、scope.protect 按整文件哈希），带按形状 / M 分派表的算子（GEMM、MoE、attention 分档），流水线并行的多里程碑
 confidence: high
-evidence: task gemm-a8w4：M3 prep 两次失败（M1/M2 复核加的 7 个分派用例写死旧交界，int3 改用例被判 oracle_modified）→ 插入维护里程碑 M8 去耦；M3 复核钉的 tp4_qkvz 512|513 在 M7 候选上挂（runs/20261124-161527-_task-run-53ea）→ 改为两侧钉，M7 复核再钉 1024|1025
+evidence: task gemm-a8w4：M3 prep 两次失败（M1/M2 复核加的 7 个分派用例写死旧交界，int3 改用例被判 oracle_modified）→ 插入维护里程碑 M8 去耦；M3 复核钉的 tp4_qkvz 512|513 在 M7 候选上挂（runs/20261124-161527-_task-run-53ea）→ 改为两侧钉，M7 复核再钉 1024|1025；task moe-ptpc-a8w4-r2 M16 复核按此预先只钉两版都成立的交界（H5120 decode 上限 64→32 留给 M17），M17 prep 的 verify_extra 133 例一次通过
 source: gemm-a8w4 (2026-11)
 ---
 **症状**：上一个里程碑刚收尾，下一个里程碑 prep 时 verify_extra 挂在“M=x 应走 kernel A”这类用例上。lane 或集成 lane 去改用例会被判 oracle_modified（受保护文件按整文件哈希比对），只有收尾复核能改用例。

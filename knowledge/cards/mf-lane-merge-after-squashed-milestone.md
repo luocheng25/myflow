@@ -4,7 +4,7 @@ kind: pitfall
 summary: 集成 lane 从 lane 原始提交出发时 prep 拒绝；改 --from M<k> --merge 因里程碑是单提交、合并基点退回更早而大量冲突：按文件取边解决，再重跑同一条 lane new 才登记
 applies: myflow（mf lane new / mf ms prep），收尾与下一条集成 lane 流水并行时
 confidence: high
-evidence: task moe-ptpc-a8w4-r2 int9 A111 → prep M17 REFUSED；int10（6d25c00）冲突解法；/opt/myflow/myflow/cli.py cmd_lane_new
+evidence: task moe-ptpc-a8w4-r2 int9 A111 → prep M17 REFUSED；int10（6d25c00）冲突解法；task mega-tp-a8w4 M6 int6（6eaac61e7a）；/opt/myflow/myflow/cli.py cmd_lane_new
 source: moe-ptpc-a8w4-r2，2026-11-24
 ---
 **症状**：`mf ms prep M<k+1> --lane int9` 报 “A111 既不是从 M<k>（收尾提交）出发的，也不是从它收尾时的候选出发的”。
@@ -22,6 +22,11 @@ src 与 tests 都冲突。
   `git diff --cached <收尾> -- <其余>` 为空来核对，提交合并。
 - 再执行一次完全相同的 `mf lane new ...`：worktree 已存在会复用，合并“已是最新”，这次才登记 lane。
 - 预防：集成 lane 等上一里程碑收尾后再从 `--from M<k>` 建；或在收尾前就从候选建（mf 认候选）。
+- 变体（mega-tp-a8w4 M6，2026-11-26）：lane 从收尾中的候选出发，但自己改了 README / kernels.md，复核在收尾提交上
+  也改了它们 → prep 自动合并收尾时冲突、REFUSED。不要在原 lane 里手工合并：用例文件相对该 lane 的 oracle
+  变了，`mf try` 判 oracle_modified。改建 `--from M<k> --merge L@N` 的集成 lane（代码取 lane、文档 / 用例取
+  收尾，可 `git merge -s ours` 后 `git checkout <收尾> -- <文档/用例>`），`ms prep --lane <int>` 不需要 mf try。
+  给 lane 的提示词写明“文档留给复核”可避免。
 
 **怎么验证**：`git log -1 --format=%P` 两个父提交分别是收尾提交与 int 头；对收尾提交的 diff 只剩 int 的增量文件。
 
